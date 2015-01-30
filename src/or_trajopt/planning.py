@@ -342,7 +342,7 @@ class TrajoptPlanner(BasePlanner):
     def PlanToEndEffectorOffset(self, robot, direction,
                                 min_distance, max_distance=None,
                                 position_tolerance=0.01,
-                                angular_tolerance=0.15, **kw_args):
+                                angular_tolerance=0.15, **kwargs):
         """
         Plan to an end-effector offset with a move-hand-straight constraint.
 
@@ -359,7 +359,72 @@ class TrajoptPlanner(BasePlanner):
         @param angular_tolerance constraint tolerance in radians
         @return traj a trajectory following specified direction
         """
-        raise ValueError("Not implemented yet.")
+        # Plan using the active manipulator.
+        manipulator = robot.GetActiveManipulator()
+        robot.SetActiveDOFs(manipulator.GetArmIndices())
+        pose = manipulator.GetEndEffectorTransform()
+
+        # Convert IK endpoint transformation to pose.
+        ee_position = pose[0:3, 3].tolist()
+        ee_rotation = openravepy.quatFromRotationMatrix(pose).tolist()
+
+        # Create dummy frame that has direction vector along Z.
+        z = direction
+        y = numpy.cross(z, pose[0:3, 0])  # Cross with EE-frame Y.
+        y /= numpy.linalg.norm(y)
+        x = numpy.cross(y, z)
+
+        cost_frame = numpy.vstack((x, y, z)).T
+        cost_rotation = openravepy.quatFromRotationMatrix(cost_frame).tolist()
+
+        # Construct a planning request with these constraints.
+        n_steps = 10
+        request = {
+            "basic_info": {
+                "n_steps": n_steps,
+                "manip": "active",
+                "start_fixed": True
+            },
+            "costs": [
+                {
+                    "type": "joint_vel",
+                    "params": {"coeffs": [1]}
+                },
+                {
+                    "type": "collision",
+                    "params": {
+                        "coeffs": [20],
+                        "dist_pen": [0.025]
+                    },
+                },
+                {
+                    "type": "pose",
+                    "params": {
+                        "xyz": [0, 0, 0],
+                        "wxyz": cost_rotation,
+                        "link": manipulator.GetEndEffector().GetName(),
+                        "rot_coeffs": [0, 0, 0],
+                        "pos_coeffs": [0, 0, 10]
+                    }
+                }
+            ],
+            "constraints": [
+                {
+                    "type": "pose",
+                    "params": {
+                        "xyz": ee_position,
+                        "wxyz": ee_rotation,
+                        "link": manipulator.GetEndEffector().GetName(),
+                        # "first_step": 0,
+                        # "last_step": n_steps-1,
+                    }
+                }
+            ],
+            "init_info": {
+                "type": "stationary"
+            }
+        }
+        return self._Plan(robot, request, **kwargs)
 
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.025, **kwargs):
