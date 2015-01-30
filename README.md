@@ -14,10 +14,9 @@ $ sudo apt-get install libopenscenegraph-dev cmake libboost-all-dev libeigen3-de
 ```
 (See http://rll.berkeley.edu/trajopt/doc/sphinx_build/html/install.html#dependencies)
 
-## License ##
-See [LICENSE.txt](LICENSE.txt).
+## Known Issues ##
 
-## OpenSceneGraph issue in Parallels VM ##
+**OpenSceneGraph issue in Parallels VM**
 
 You will likely receive several "undefined reference to
 `glXCreateGLXPbufferSGIX`" linking errors when building TrajOpt inside a
@@ -38,5 +37,9 @@ This will produce several `.deb` packages in the parent directory. You can
 install these Debian packages using your favorite installation method (`gdebi`,
 `dpkg -i`, etc).
 
-## Authors ##
+## License ##
+See [LICENSE.txt](LICENSE.txt).
+
+## Contributors ##
 * Pras Velagapudi `<pkv@cs.cmu.edu>`
+* Michael Koval `<mkoval@cs.cmu.edu>`
