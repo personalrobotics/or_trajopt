@@ -12,4 +12,4 @@ package is included in a catkin workspace.
 See [LICENSE.txt](LICENSE.txt).
 
 ## Authors ##
-* Pras Velagapudi <pkv@cs.cmu.edu>
+* Pras Velagapudi `<pkv@cs.cmu.edu>`
