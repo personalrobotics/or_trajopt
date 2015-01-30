@@ -373,7 +373,7 @@ class TrajoptPlanner(BasePlanner):
     def _WaypointsToTraj(self, robot, waypoints):
         """Converts a list of waypoints to an OpenRAVE trajectory."""
         traj = openravepy.RaveCreateTrajectory(robot.GetEnv(), '')
-        traj.Init(robot.GetActiveConfigurationSpecification())
+        traj.Init(robot.GetActiveConfigurationSpecification('linear'))
 
         for (i, waypoint) in enumerate(waypoints):
             traj.Insert(i, waypoint)
