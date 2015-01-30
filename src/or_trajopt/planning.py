@@ -33,7 +33,7 @@ class TrajoptPlanner(BasePlanner):
         Plan to a desired configuration with Trajopt.
 
         This function invokes the Trajopt planner directly on the specified
-        JSON request.  This can be used to implement custom path optimization
+        JSON request. This can be used to implement custom path optimization
         algorithms.
 
         @param robot the robot whose active DOFs will be used
@@ -134,8 +134,7 @@ class TrajoptPlanner(BasePlanner):
         return self._Plan(robot, request, **kwargs)
 
     @PlanningMethod
-    def PlanToIK(self, robot, pose,
-                 ranker=prpy.ik_ranking.JointLimitAvoidance, **kwargs):
+    def PlanToIK(self, robot, pose, **kwargs):
         """
         Plan to a desired end effector pose with Trajopt.
 
@@ -149,6 +148,25 @@ class TrajoptPlanner(BasePlanner):
                               or press escape to disable further plotting
         @return traj a trajectory from current configuration to specified pose
         """
+        self._PlanToIK(robot, pose, **kwargs)
+
+    @PlanningMethod
+    def PlanToEndEffector(self, robot, pose, **kwargs):
+        """
+        Plan to a desired end effector pose with Trajopt.
+
+        This function is internally implemented identically to PlanToIK().
+
+        @param robot the robot whose active manipulator will be used
+        @param pose the desired manipulator end effector pose
+        @param is_interactive pause every iteration, until you press 'p'
+                              or press escape to disable further plotting
+        @return traj a trajectory from current configuration to specified pose
+        """
+        self._PlanToIK(robot, pose, **kwargs)
+
+    def _PlanToIK(self, robot, pose,
+                  ranker=prpy.ik_ranking.JointLimitAvoidance, **kwargs):
         # Plan using the active manipulator.
         manipulator = robot.GetActiveManipulator()
         robot.SetActiveDOFs(manipulator.GetArmIndices())
@@ -319,6 +337,29 @@ class TrajoptPlanner(BasePlanner):
             if not traj_is_safe(waypoints, robot):
                 return PlanningError("Result was in collision.")
         return self._WaypointsToTraj(robot, waypoints)
+
+    @PlanningMethod
+    def PlanToEndEffectorOffset(self, robot, direction,
+                                min_distance, max_distance=None,
+                                position_tolerance=0.01,
+                                angular_tolerance=0.15, **kw_args):
+        """
+        Plan to an end-effector offset with a move-hand-straight constraint.
+
+        This function plans a trajectory to purely translate a hand in the
+        given direction as far as possible before collision. Movement less
+        than min_distance will return failure. The motion will not also move
+        further than max_distance.
+
+        @param robot the robot whose active DOFs will be used
+        @param direction unit vector in the direction of motion
+        @param distance minimum distance in meters
+        @param max_distance maximum distance in meters
+        @param position_tolerance constraint tolerance in meters
+        @param angular_tolerance constraint tolerance in radians
+        @return traj a trajectory following specified direction
+        """
+        raise ValueError("Not implemented yet.")
 
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.025, **kwargs):
