@@ -146,6 +146,7 @@ class TrajoptPlanner(BasePlanner):
         """
         # Plan using the active manipulator.
         manipulator = robot.GetActiveManipulator()
+        robot.SetActiveDOFs(manipulator.GetArmIndices())
 
         # Find initial collision-free IK solution.
         from openravepy import (IkFilterOptions,
@@ -153,10 +154,17 @@ class TrajoptPlanner(BasePlanner):
                                 IkParameterizationType)
         ik_param = IkParameterization(
             pose, IkParameterizationType.Transform6D)
-        init_joint_config = manipulator.FindIKSolution(
+        ik_solutions = manipulator.FindIKSolutions(
             ik_param, IkFilterOptions.CheckEnvCollisions)
-        if init_joint_config is None:
+        if not len(ik_solutions):
             raise PlanningError('No collision-free IK solution.')
+
+        # Sort the IK solutions in ascending order by the costs returned by the
+        # ranker. Lower cost solutions are better and infinite cost solutions
+        # are assumed to be infeasible.
+        scores = ranker(robot, ik_solutions)
+        best_idx = numpy.argmax(scores)
+        init_joint_config = ik_solutions[best_idx]
 
         # Convert IK endpoint transformation to pose.
         goal_position = pose[0:3, 3].tolist()
