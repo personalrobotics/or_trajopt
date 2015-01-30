@@ -11,5 +11,26 @@ package is included in a catkin workspace.
 ## License ##
 See [LICENSE.txt](LICENSE.txt).
 
+## OpenSceneGraph issue in Parallels VM ##
+
+You will likely receive several "undefined reference to
+`glXCreateGLXPbufferSGIX`" linking errors when building TrajOpt inside a
+Parallels virtual machine. This is [known issue](https://forum.parallels.com/threads/glxcreateglxpbuffersgix-missing-from-parallels-tools-libgl-so.257728/)
+that results from OpenSceneGraph using a deprecated OpenGL command that is not
+implemented by Parallels. You can work around this issue by building
+OpenSceneGraph from source  the `GLX_SGIX_pbuffer` pre-processor define
+`#undef`ed.
+
+If you are on Ubuntu, you can easily build a patched version of OpenSceneGraph
+using git-buildpackage. To do so, run:
+
+    $ git clone https://github.com/mkoval/openscenegraph-release.git
+    $ cd openscenegraph-release
+    $ gbp buildpackage --git-debian-branch=master -uc -us
+
+This will produce several `.deb` packages in the parent directory. You can
+install these Debian packages using your favorite installation method (`gdebi`,
+`dpkg -i`, etc).
+
 ## Authors ##
 * Pras Velagapudi <pkv@cs.cmu.edu>
