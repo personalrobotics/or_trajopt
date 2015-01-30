@@ -27,7 +27,8 @@ class TrajoptPlanner(BasePlanner):
     def __str__(self):
         return 'Trajopt'
 
-    def _Plan(self, robot, request, interactive=False, **kwargs):
+    def _Plan(self, robot, request, interactive=False,
+              constraint_threshold=1e-4, **kwargs):
         """
         Plan to a desired configuration with Trajopt.
 
@@ -38,7 +39,8 @@ class TrajoptPlanner(BasePlanner):
         @param robot the robot whose active DOFs will be used
         @param request a JSON planning request for Trajopt
         @param interactive pause every iteration, until you press 'p'
-                              or press escape to disable further plotting.
+                              or press escape to disable further plotting
+        @param constraint_threshold acceptable per-constraint violation error
         @return traj a trajectory from current configuration to specified goal
         """
         import json
@@ -60,9 +62,12 @@ class TrajoptPlanner(BasePlanner):
         logger.info("Optimization took {:.3f} seconds".format(t_elapsed))
 
         # Check for constraint violations.
-        if result.GetConstraints():
-            raise PlanningError("Trajectory did not satisfy constraints: {:s}"
-                                .format(str(result.GetConstraints())))
+        for name, error in result.GetConstraints():
+            if error > constraint_threshold:
+                raise PlanningError(
+                    "Trajectory violates contraint '{:s}': {:f} > {:f}"
+                    .format(name, error, constraint_threshold)
+                )
 
         # Check for the returned trajectory.
         waypoints = result.GetTraj()
@@ -90,7 +95,7 @@ class TrajoptPlanner(BasePlanner):
         @param robot the robot whose active DOFs will be used
         @param goal the desired robot joint configuration
         @param is_interactive pause every iteration, until you press 'p'
-                              or press escape to disable further plotting.
+                              or press escape to disable further plotting
         @return traj a trajectory from current configuration to specified goal
         """
         # Auto-cast to numpy array if this was a list.
@@ -141,7 +146,7 @@ class TrajoptPlanner(BasePlanner):
         @param pose the desired manipulator end effector pose
         @param ranker an IK ranking function to use over the IK solutions
         @param is_interactive pause every iteration, until you press 'p'
-                              or press escape to disable further plotting.
+                              or press escape to disable further plotting
         @return traj a trajectory from current configuration to specified pose
         """
         # Plan using the active manipulator.
@@ -216,7 +221,7 @@ class TrajoptPlanner(BasePlanner):
         @param robot the robot whose active manipulator will be used
         @param tsrchains a list of TSRChain objects to respect during planning
         @param is_interactive pause every iteration, until you press 'p'
-                              or press escape to disable further plotting.
+                              or press escape to disable further plotting
         @return traj
         """
         import json
@@ -324,7 +329,7 @@ class TrajoptPlanner(BasePlanner):
         @param traj the original trajectory that will be optimized
         @param distance_penalty the penalty for approaching obstacles
         @param is_interactive pause every iteration, until you press 'p'
-                              or press escape to disable further plotting.
+                              or press escape to disable further plotting
         @return traj a trajectory from current configuration to specified goal
         """
         if not traj.GetNumWaypoints():
