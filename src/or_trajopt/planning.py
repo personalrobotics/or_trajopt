@@ -242,6 +242,8 @@ class TrajoptPlanner(BasePlanner):
                               or press escape to disable further plotting
         @return traj
         """
+        raise PlanningError("Not yet supported!")
+
         import json
         import time
         import trajoptpy
@@ -339,8 +341,8 @@ class TrajoptPlanner(BasePlanner):
         return self._WaypointsToTraj(robot, waypoints)
 
     @PlanningMethod
-    def PlanToEndEffectorOffset(self, robot, direction,
-                                min_distance, max_distance=None,
+    def PlanToEndEffectorOffset(self, robot, direction, distance,
+                                max_distance=None,
                                 position_tolerance=0.01,
                                 angular_tolerance=0.15, **kwargs):
         """
@@ -359,6 +361,8 @@ class TrajoptPlanner(BasePlanner):
         @param angular_tolerance constraint tolerance in radians
         @return traj a trajectory following specified direction
         """
+        raise PlanningError("Not yet supported!")
+
         # Plan using the active manipulator.
         manipulator = robot.GetActiveManipulator()
         robot.SetActiveDOFs(manipulator.GetArmIndices())
