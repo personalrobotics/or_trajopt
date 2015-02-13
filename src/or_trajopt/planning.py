@@ -8,7 +8,6 @@ import logging
 import numpy
 import time
 import openravepy
-import prpy.ik_ranking
 from . import constraints
 
 logger = logging.getLogger(__name__)
@@ -100,10 +99,11 @@ class TrajoptPlanner(BasePlanner):
         """
         # Auto-cast to numpy array if this was a list.
         goal = numpy.array(goal)
+        num_steps = 10
 
         request = {
             "basic_info": {
-                "n_steps": 10,
+                "n_steps": num_steps,
                 "manip": "active",
                 "start_fixed": True
             },
@@ -151,7 +151,7 @@ class TrajoptPlanner(BasePlanner):
         self._PlanToIK(robot, pose, **kwargs)
 
     @PlanningMethod
-    def PlanToEndEffector(self, robot, pose, **kwargs):
+    def PlanToEndEffectorPose(self, robot, pose, **kwargs):
         """
         Plan to a desired end effector pose with Trajopt.
 
@@ -166,10 +166,16 @@ class TrajoptPlanner(BasePlanner):
         self._PlanToIK(robot, pose, **kwargs)
 
     def _PlanToIK(self, robot, pose,
-                  ranker=prpy.ik_ranking.JointLimitAvoidance, **kwargs):
+                  ranker=None, **kwargs):
+
         # Plan using the active manipulator.
-        manipulator = robot.GetActiveManipulator()
-        robot.SetActiveDOFs(manipulator.GetArmIndices())
+        with robot.GetEnv():
+            manipulator = robot.GetActiveManipulator()
+
+            # Distance from current configuration is default ranking.
+            if ranker is None:
+                from prpy.ik_ranking import NominalConfiguration
+                ranker = NominalConfiguration(manipulator.GetArmDOFValues())
 
         # Find initial collision-free IK solution.
         from openravepy import (IkFilterOptions,
@@ -193,10 +199,13 @@ class TrajoptPlanner(BasePlanner):
         goal_position = pose[0:3, 3].tolist()
         goal_rotation = openravepy.quatFromRotationMatrix(pose).tolist()
 
+        # Settings for TrajOpt
+        num_steps = 10
+
         # Construct a planning request with these constraints.
         request = {
             "basic_info": {
-                "n_steps": 10,
+                "n_steps": num_steps,
                 "manip": "active",
                 "start_fixed": True
             },
@@ -220,7 +229,7 @@ class TrajoptPlanner(BasePlanner):
                         "xyz": goal_position,
                         "wxyz": goal_rotation,
                         "link": manipulator.GetEndEffector().GetName(),
-                        "timestep": 9
+                        "timestep": num_steps-1
                     }
                 }
             ],
@@ -229,7 +238,12 @@ class TrajoptPlanner(BasePlanner):
                 "endpoint": init_joint_config.tolist()
             }
         }
-        return self._Plan(robot, request, **kwargs)
+
+        # Set active DOFs to match active manipulator and plan.
+        p = openravepy.KinBody.SaveParameters
+        with robot.CreateRobotStateSaver(p.ActiveDOF):
+            robot.SetActiveDOFs(manipulator.GetArmIndices())
+            return self._Plan(robot, request, **kwargs)
 
     @PlanningMethod
     def PlanToTSR(self, robot, tsrchains, is_interactive=False, **kw_args):
@@ -249,7 +263,7 @@ class TrajoptPlanner(BasePlanner):
         import trajoptpy
 
         manipulator = robot.GetActiveManipulator()
-        n_steps = 10
+        n_steps = 20
         n_dofs = robot.GetActiveDOF()
 
         # Create separate lists for the goal and trajectory-wide constraints.
@@ -364,9 +378,9 @@ class TrajoptPlanner(BasePlanner):
         raise PlanningError("Not yet supported!")
 
         # Plan using the active manipulator.
-        manipulator = robot.GetActiveManipulator()
-        robot.SetActiveDOFs(manipulator.GetArmIndices())
-        pose = manipulator.GetEndEffectorTransform()
+        with robot.GetEnv():
+            manipulator = robot.GetActiveManipulator()
+            pose = manipulator.GetEndEffectorTransform()
 
         # Convert IK endpoint transformation to pose.
         ee_position = pose[0:3, 3].tolist()
@@ -428,7 +442,12 @@ class TrajoptPlanner(BasePlanner):
                 "type": "stationary"
             }
         }
-        return self._Plan(robot, request, **kwargs)
+
+        # Set active DOFs to match active manipulator and plan.
+        p = openravepy.KinBody.SaveParameters
+        with robot.CreateRobotStateSaver(p.ActiveDOF):
+            robot.SetActiveDOFs(manipulator.GetArmIndices())
+            return self._Plan(robot, request, **kwargs)
 
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.025, **kwargs):
