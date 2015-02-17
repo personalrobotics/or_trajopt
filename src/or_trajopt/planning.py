@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from prpy.planning.base import (BasePlanner,
+                                MetaPlanner,
                                 PlanningError,
                                 PlanningMethod)
 import logging
@@ -11,6 +12,41 @@ import openravepy
 from . import constraints
 
 logger = logging.getLogger(__name__)
+
+
+class TrajoptWrapper(MetaPlanner):
+    def __init__(self, planner):
+        """
+        Create a PrPy binding that wraps an existing planner and calls
+        its planning methods followed by Trajopt's OptimizeTrajectory.
+
+        @param planner the PrPy plan wrapper that will be wrapped
+        """
+        assert planner
+        # TODO: this should be revisited once the MetaPlanners are not assuming
+        #       self._planners must exist.
+        self._planners = (planner,)
+        self._optimizer = TrajoptPlanner()
+
+    def __str__(self):
+        return 'TrajoptWrapper({0:s})'.format(self._planners[0])
+
+    def get_planners(self, method_name):
+        return [planner for planner in self._planners
+                if hasattr(planner, method_name)]
+
+    def plan(self, method, args, kwargs):
+        # Can't handle deferred planning yet.
+        assert not kwargs['defer']
+
+        # Call the wrapped planner to get the seed trajectory.
+        planner_method = getattr(self._planners[0], method)
+        traj = planner_method(*args, **kwargs)
+
+        # Call Trajopt to optimize the seed trajectory.
+        # (According to prpy standards, first positional argument is 'robot'.)
+        opt_traj = self._optimizer.OptimizeTrajectory(args[0], traj, **kwargs)
+        return opt_traj
 
 
 class TrajoptPlanner(BasePlanner):
@@ -245,7 +281,7 @@ class TrajoptPlanner(BasePlanner):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
             return self._Plan(robot, request, **kwargs)
 
-    @PlanningMethod
+    # @PlanningMethod
     def PlanToTSR(self, robot, tsrchains, is_interactive=False, **kw_args):
         """
         Plan using the given list of TSR chains with TrajOpt.
@@ -256,8 +292,6 @@ class TrajoptPlanner(BasePlanner):
                               or press escape to disable further plotting
         @return traj
         """
-        raise PlanningError("Not yet supported!")
-
         import json
         import time
         import trajoptpy
@@ -354,7 +388,7 @@ class TrajoptPlanner(BasePlanner):
                 return PlanningError("Result was in collision.")
         return self._WaypointsToTraj(robot, waypoints)
 
-    @PlanningMethod
+    # @PlanningMethod
     def PlanToEndEffectorOffset(self, robot, direction, distance,
                                 max_distance=None,
                                 position_tolerance=0.01,
@@ -375,8 +409,6 @@ class TrajoptPlanner(BasePlanner):
         @param angular_tolerance constraint tolerance in radians
         @return traj a trajectory following specified direction
         """
-        raise PlanningError("Not yet supported!")
-
         # Plan using the active manipulator.
         with robot.GetEnv():
             manipulator = robot.GetActiveManipulator()
