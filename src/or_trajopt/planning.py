@@ -9,9 +9,11 @@ import logging
 import numpy
 import time
 import openravepy
+import os
 from . import constraints
 
 logger = logging.getLogger(__name__)
+os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
 
 
 class TrajoptWrapper(MetaPlanner):
@@ -26,7 +28,7 @@ class TrajoptWrapper(MetaPlanner):
         # TODO: this should be revisited once the MetaPlanners are not assuming
         #       self._planners must exist.
         self._planners = (planner,)
-        self._optimizer = TrajoptPlanner()
+        self._trajopt = TrajoptPlanner()
 
     def __str__(self):
         return 'TrajoptWrapper({0:s})'.format(self._planners[0])
@@ -39,14 +41,48 @@ class TrajoptWrapper(MetaPlanner):
         # Can't handle deferred planning yet.
         assert not kwargs['defer']
 
+        # According to prpy spec, the first positional argument is 'robot'.
+        robot = args[0]
+
         # Call the wrapped planner to get the seed trajectory.
         planner_method = getattr(self._planners[0], method)
         traj = planner_method(*args, **kwargs)
 
+        # Simplify redundant waypoints in the trajectory.
+        from prpy.util import SimplifyTrajectory
+        traj = SimplifyTrajectory(traj, robot)
+
+        # Run path shortcutting on the RRT path.
+        import openravepy
+        params = openravepy.Planner.PlannerParameters()
+        params.SetExtraParameters('<time_limit>0.25</time_limit>')
+        simplifier = openravepy.RaveCreatePlanner(robot.GetEnv(),
+                                                  'OMPL_Simplifier')
+        simplifier.InitPlan(robot, params)
+
+        with robot:
+            result = simplifier.PlanPath(traj)
+            assert result == openravepy.PlannerStatus.HasSolution
+
         # Call Trajopt to optimize the seed trajectory.
-        # (According to prpy standards, first positional argument is 'robot'.)
-        opt_traj = self._optimizer.OptimizeTrajectory(args[0], traj, **kwargs)
-        return opt_traj
+        # Try different distance penalties until out of collision.
+        penalties = numpy.logspace(numpy.log(0.05), numpy.log(0.5), num=4)
+        for distance_penalty in penalties:
+            try:
+                return self._trajopt.OptimizeTrajectory(
+                    robot, traj,
+                    **kwargs
+                )
+            except PlanningError:
+                logger.warn("Failed to optimize trajectory "
+                            "with distance penalty: {:f}"
+                            .format(distance_penalty))
+
+        # If all of the optimizations ended in collision,
+        # just return the original.
+        logger.warn("Failed to optimize trajectory, "
+                    "returning unoptimized solution.")
+        return traj
 
 
 class TrajoptPlanner(BasePlanner):
@@ -94,7 +130,7 @@ class TrajoptPlanner(BasePlanner):
         t_start = time.time()
         result = trajoptpy.OptimizeProblem(prob)
         t_elapsed = time.time() - t_start
-        logger.info("Optimization took {:.3f} seconds".format(t_elapsed))
+        logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
 
         # Check for constraint violations.
         for name, error in result.GetConstraints():
@@ -111,8 +147,8 @@ class TrajoptPlanner(BasePlanner):
 
         # Verify the trajectory and return it as a result.
         from trajoptpy.check_traj import traj_is_safe
-        with env:
-            # Set robot DOFs to DOFs in optimization problem
+        with robot:
+            # Set robot DOFs to match DOFs in optimization problem
             prob.SetRobotActiveDOFs()
 
             # Check that trajectory is collision free
