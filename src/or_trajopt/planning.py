@@ -121,39 +121,45 @@ class TrajoptPlanner(BasePlanner):
         env = robot.GetEnv()
         trajoptpy.SetInteractive(interactive)
 
-        # Convert dictionary into json-formatted string and create object that
-        # stores optimization problem.
-        s = json.dumps(request)
-        prob = trajoptpy.ConstructProblem(s, env)
+        # Trajopt's UserData gets confused if the same environment
+        # is cloned into multiple times, so create a fresh env here.
+        from prpy import Clone
+        with Clone(env) as internal_env:
+            internal_robot = internal_env.Cloned(robot)
 
-        # Perform trajectory optimization.
-        t_start = time.time()
-        result = trajoptpy.OptimizeProblem(prob)
-        t_elapsed = time.time() - t_start
-        logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
+            # Convert dictionary into json-formatted string and create object
+            # that stores optimization problem.
+            s = json.dumps(request)
+            prob = trajoptpy.ConstructProblem(s, internal_env)
 
-        # Check for constraint violations.
-        for name, error in result.GetConstraints():
-            if error > constraint_threshold:
-                raise PlanningError(
-                    "Trajectory violates contraint '{:s}': {:f} > {:f}"
-                    .format(name, error, constraint_threshold)
-                )
+            # Perform trajectory optimization.
+            t_start = time.time()
+            result = trajoptpy.OptimizeProblem(prob)
+            t_elapsed = time.time() - t_start
+            logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
 
-        # Check for the returned trajectory.
-        waypoints = result.GetTraj()
-        if waypoints is None:
-            raise PlanningError("Trajectory result was empty.")
+            # Check for constraint violations.
+            for name, error in result.GetConstraints():
+                if error > constraint_threshold:
+                    raise PlanningError(
+                        "Trajectory violates contraint '{:s}': {:f} > {:f}"
+                        .format(name, error, constraint_threshold)
+                    )
 
-        # Verify the trajectory and return it as a result.
-        from trajoptpy.check_traj import traj_is_safe
-        with robot:
-            # Set robot DOFs to match DOFs in optimization problem
-            prob.SetRobotActiveDOFs()
+            # Check for the returned trajectory.
+            waypoints = result.GetTraj()
+            if waypoints is None:
+                raise PlanningError("Trajectory result was empty.")
 
-            # Check that trajectory is collision free
-            if not traj_is_safe(waypoints, robot):
-                raise PlanningError("Result was in collision.")
+            # Verify the trajectory and return it as a result.
+            from trajoptpy.check_traj import traj_is_safe
+            with internal_robot:
+                # Set robot DOFs to match DOFs in optimization problem
+                prob.SetRobotActiveDOFs()
+
+                # Check that trajectory is collision free
+                if not traj_is_safe(waypoints, internal_robot):
+                    raise PlanningError("Result was in collision.")
 
         # Convert the waypoints to a trajectory.
         return self._WaypointsToTraj(robot, waypoints)
