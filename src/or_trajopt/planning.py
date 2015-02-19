@@ -524,7 +524,7 @@ class TrajoptPlanner(BasePlanner):
             return self._Plan(robot, request, **kwargs)
 
     def OptimizeTrajectory(self, robot, traj,
-                           distance_penalty=0.025, **kwargs):
+                           distance_penalty=0.050, **kwargs):
         """
         Optimize an existing feasible trajectory using TrajOpt.
 
