@@ -270,7 +270,7 @@ class TrajoptPlanner(BasePlanner):
         # ranker. Lower cost solutions are better and infinite cost solutions
         # are assumed to be infeasible.
         scores = ranker(robot, ik_solutions)
-        best_idx = numpy.argmax(scores)
+        best_idx = numpy.argmin(scores)
         init_joint_config = ik_solutions[best_idx]
 
         # Convert IK endpoint transformation to pose.
