@@ -226,7 +226,7 @@ class TrajoptPlanner(BasePlanner):
                               or press escape to disable further plotting
         @return traj a trajectory from current configuration to specified pose
         """
-        self._PlanToIK(robot, pose, **kwargs)
+        return self._PlanToIK(robot, pose, **kwargs)
 
     @PlanningMethod
     def PlanToEndEffectorPose(self, robot, pose, **kwargs):
@@ -241,7 +241,7 @@ class TrajoptPlanner(BasePlanner):
                               or press escape to disable further plotting
         @return traj a trajectory from current configuration to specified pose
         """
-        self._PlanToIK(robot, pose, **kwargs)
+        return self._PlanToIK(robot, pose, **kwargs)
 
     def _PlanToIK(self, robot, pose,
                   ranker=None, **kwargs):
