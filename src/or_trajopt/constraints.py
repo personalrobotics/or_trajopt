@@ -1,7 +1,19 @@
 import itertools
 import time
 import numpy
-import openravepy
+
+
+def xyzrpy_from_H(H):
+    """Converts from homogeneous transform to translation and roll-pitch-yaw"""
+    xyzrpy = numpy.zeros(6)
+    xyzrpy[0:3] = H[:3, 3]
+
+    # Compute roll, pitch, yaw from Lavalle 2006.
+    # See: http://planning.cs.uiuc.edu/node103.html
+    xyzrpy[3] = numpy.arctan2(H[1, 0], H[0, 0])
+    xyzrpy[4] = numpy.arctan2(-H[2, 0], numpy.linalg.norm(H[2, 1:3], ord=2))
+    xyzrpy[5] = numpy.arctan2(H[2, 1], H[2, 2])
+    return xyzrpy
 
 
 def _TsrSampler(tsrchains, timelimit=2.0):
@@ -21,9 +33,6 @@ def _TsrCostFn(robot, tsrchain_list):
     This function returns the minimum projected Euclidean distance to the
     closest TSR in a TSR set.
     """
-    import prpy.tsr.kin as kin
-    XYZYPR_TO_XYZRPY = [0, 1, 2, 5, 4, 3]
-
     # I don't know how to project onto TSR chains...
     for tsrchain in tsrchain_list:
         if len(tsrchain.TSRs) != 1:
@@ -44,12 +53,13 @@ def _TsrCostFn(robot, tsrchain_list):
             Tw_relative = numpy.dot(numpy.linalg.inv(tsr.T0_w), Tw_target)
 
             # Compute distance from the Bw AABB.
-            xyzypr = kin.pose_to_xyzypr(openravepy.poseFromMatrix(Tw_relative))
-            xyzrpy = xyzypr[XYZYPR_TO_XYZRPY]
+            xyzrpy = xyzrpy_from_H(Tw_relative)
 
             distance_vector = numpy.maximum(
+                # Nonzero distance if we are greater than the max Bw.
                 numpy.maximum(xyzrpy - tsr.Bw[:, 1], numpy.zeros(6)),
-                numpy.maximum(tsr.Bw[:, 1] - xyzrpy, numpy.zeros(6))
+                # Nonzero distance if we are less than the min Bw.
+                numpy.maximum(tsr.Bw[:, 0] - xyzrpy, numpy.zeros(6))
             )
             d.append(numpy.linalg.norm(distance_vector, ord=2))
 
