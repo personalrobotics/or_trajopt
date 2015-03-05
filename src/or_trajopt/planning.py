@@ -323,24 +323,33 @@ class TrajoptPlanner(BasePlanner):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
             return self._Plan(robot, request, **kwargs)
 
-    # @PlanningMethod
-    def PlanToTSR(self, robot, tsrchains, is_interactive=False, **kw_args):
+    @PlanningMethod
+    def PlanToTSR(self, robot, tsrchains,
+                  interactive=False, constraint_threshold=1e-4, **kw_args):
         """
         Plan using the given list of TSR chains with TrajOpt.
 
         @param robot the robot whose active manipulator will be used
         @param tsrchains a list of TSRChain objects to respect during planning
-        @param is_interactive pause every iteration, until you press 'p'
-                              or press escape to disable further plotting
+        @param interactive pause every iteration, until you press 'p'
+                           or press escape to disable further plotting
         @return traj
         """
         import json
         import time
         import trajoptpy
 
-        manipulator = robot.GetActiveManipulator()
+        # Plan using the active manipulator.
+        with robot.GetEnv():
+            manipulator = robot.GetActiveManipulator()
+
+            # Distance from current configuration is default ranking.
+            from prpy.ik_ranking import NominalConfiguration
+            ranker = NominalConfiguration(manipulator.GetArmDOFValues())
+
+        # Define trajectory parameters.
+        n_dofs = len(manipulator.GetArmIndices())
         n_steps = 20
-        n_dofs = robot.GetActiveDOF()
 
         # Create separate lists for the goal and trajectory-wide constraints.
         goal_tsrs = [t for t in tsrchains if t.sample_goal]
@@ -350,15 +359,22 @@ class TrajoptPlanner(BasePlanner):
         from openravepy import (IkFilterOptions,
                                 IkParameterization,
                                 IkParameterizationType)
-        for tsr in self._TsrSampler(goal_tsrs):
+        for tsr in constraints._TsrSampler(goal_tsrs):
             ik_param = IkParameterization(
                 tsr.sample(), IkParameterizationType.Transform6D)
-            init_joint_config = manipulator.FindIKSolutions(
+            ik_solutions = manipulator.FindIKSolutions(
                 ik_param, IkFilterOptions.CheckEnvCollisions)
-            if init_joint_config:
+            if len(ik_solutions):
                 break
-        if not init_joint_config:
-            raise PlanningError('No collision-free IK solutions.')
+        if not len(ik_solutions):
+            raise PlanningError('No collision-free goals were found.')
+
+        # Sort the IK solutions in ascending order by the costs returned by the
+        # ranker. Lower cost solutions are better and infinite cost solutions
+        # are assumed to be infeasible.
+        scores = ranker(robot, ik_solutions)
+        best_idx = numpy.argmin(scores)
+        init_joint_config = ik_solutions[best_idx]
 
         # Construct a planning request with these constraints.
         request = {
@@ -389,52 +405,67 @@ class TrajoptPlanner(BasePlanner):
 
         # Set up environment.
         env = robot.GetEnv()
-        trajoptpy.SetInteractive(is_interactive)
+        trajoptpy.SetInteractive(interactive)
 
-        # Convert dictionary into json-formatted string and create object that
-        # stores optimization problem.
-        s = json.dumps(request)
-        prob = trajoptpy.ConstructProblem(s, env)
-        for t in xrange(1, n_steps):
-            prob.AddConstraint(constraints._TsrCostFn(robot, traj_tsrs),
-                               [(t, j) for j in xrange(n_dofs)],
-                               "EQ", "up{:d}".format(t))
-        prob.AddConstraint(constraints._TsrCostFn(robot, goal_tsrs),
-                           [(n_steps-1, j) for j in xrange(n_dofs)],
-                           "EQ", "up{:d}".format(t))
+        # Trajopt's UserData gets confused if the same environment
+        # is cloned into multiple times, so create a fresh env here.
+        from prpy import Clone
+        with Clone(env) as internal_env:
+            internal_robot = internal_env.Cloned(robot)
+            internal_robot.SetActiveDOFs(manipulator.GetArmIndices())
 
-        # Perform trajectory optimization.
-        t_start = time.time()
-        result = trajoptpy.OptimizeProblem(prob)
-        t_elapsed = time.time() - t_start
-        logger.info("Optimization took {:.3f} seconds".format(t_elapsed))
+            # Convert dictionary into json-formatted string and create object
+            # that stores optimization problem.
+            s = json.dumps(request)
+            prob = trajoptpy.ConstructProblem(s, internal_env)
 
-        # Check for constraint violations.
-        if result.GetConstraints():
-            raise PlanningError("Trajectory did not satisfy constraints: {:s}"
-                                .format(str(result.GetConstraints())))
+            traj_constraint = constraints._TsrCostFn(internal_robot, traj_tsrs)
+            for t in xrange(1, n_steps):
+                prob.AddConstraint(traj_constraint,
+                                   [(t, j) for j in xrange(n_dofs)],
+                                   "EQ", "traj_tsr{:d}".format(t))
 
-        # Check for the returned trajectory.
-        waypoints = result.GetTraj()
-        if waypoints is None:
-            raise PlanningError("Trajectory result was empty.")
+            goal_constraint = constraints._TsrCostFn(internal_robot, goal_tsrs)
+            prob.AddConstraint(goal_constraint,
+                               [(n_steps-1, j) for j in xrange(n_dofs)],
+                               "EQ", "goal_tsr")
 
-        # Verify the trajectory and return it as a result.
-        from trajoptpy.check_traj import traj_is_safe
-        with env:
-            # Set robot DOFs to DOFs in optimization problem
-            prob.SetRobotActiveDOFs()
+            # Perform trajectory optimization.
+            t_start = time.time()
+            result = trajoptpy.OptimizeProblem(prob)
+            t_elapsed = time.time() - t_start
+            logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
 
-            # Check that trajectory is collision free
-            if not traj_is_safe(waypoints, robot):
-                return PlanningError("Result was in collision.")
+            # Check for constraint violations.
+            for name, error in result.GetConstraints():
+                if error > constraint_threshold:
+                    raise PlanningError(
+                        "Trajectory violates contraint '{:s}': {:f} > {:f}"
+                        .format(name, error, constraint_threshold)
+                    )
+
+            # Check for the returned trajectory.
+            waypoints = result.GetTraj()
+            if waypoints is None:
+                raise PlanningError("Trajectory result was empty.")
+
+            # Verify the trajectory and return it as a result.
+            from trajoptpy.check_traj import traj_is_safe
+            with internal_robot:
+                # Set robot DOFs to match DOFs in optimization problem
+                prob.SetRobotActiveDOFs()
+
+                # Check that trajectory is collision free
+                if not traj_is_safe(waypoints, internal_robot):
+                    raise PlanningError("Result was in collision.")
+
         return self._WaypointsToTraj(robot, waypoints)
 
     # @PlanningMethod
-    def PlanToEndEffectorOffset(self, robot, direction, distance,
-                                max_distance=None,
-                                position_tolerance=0.01,
-                                angular_tolerance=0.15, **kwargs):
+    def BrokenPlanToEndEffectorOffset(self, robot, direction, distance,
+                                      max_distance=None,
+                                      position_tolerance=0.01,
+                                      angular_tolerance=0.15, **kwargs):
         """
         Plan to an end-effector offset with a move-hand-straight constraint.
 

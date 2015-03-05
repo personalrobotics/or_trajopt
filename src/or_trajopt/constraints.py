@@ -1,6 +1,7 @@
 import itertools
 import time
 import numpy
+import openravepy
 
 
 def _TsrSampler(tsrchains, timelimit=2.0):
@@ -25,8 +26,9 @@ def _TsrCostFn(robot, tsrchain_list):
 
     # I don't know how to project onto TSR chains...
     for tsrchain in tsrchain_list:
-        if len(tsrchain.TSRs) > 0:
-            raise ValueError("Cannot project TSR chain.")
+        if len(tsrchain.TSRs) != 1:
+            raise ValueError("Cannot project TSR chain: {:s}"
+                             .format(str(tsrchain.TSRs)))
     tsrlist = [tsrchain.TSRs[0] for tsrchain in tsrchain_list]
 
     # Create a joint constraint function over all TSRs.
@@ -42,7 +44,7 @@ def _TsrCostFn(robot, tsrchain_list):
             Tw_relative = numpy.dot(numpy.linalg.inv(tsr.T0_w), Tw_target)
 
             # Compute distance from the Bw AABB.
-            xyzypr = kin.pose_to_xyzypr(Tw_relative)
+            xyzypr = kin.pose_to_xyzypr(openravepy.poseFromMatrix(Tw_relative))
             xyzrpy = xyzypr[XYZYPR_TO_XYZRPY]
 
             distance_vector = numpy.maximum(
@@ -51,7 +53,8 @@ def _TsrCostFn(robot, tsrchain_list):
             )
             d.append(numpy.linalg.norm(distance_vector, ord=2))
 
-        return numpy.min(d)
+        # Return the minimum cost or 0.0 if there are no constraints.
+        return numpy.min(d) if len(d) else 0.0
 
     # Return the constraint function itself.
     return f
