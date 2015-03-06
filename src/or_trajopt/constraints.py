@@ -64,7 +64,7 @@ def _TsrCostFn(robot, tsrchain_list):
             d.append(numpy.linalg.norm(distance_vector, ord=2))
 
         # Return the minimum cost or 0.0 if there are no constraints.
-        return numpy.min(d) if len(d) else 0.0
+        return d if len(d) else 0.0
 
     # Return the constraint function itself.
     return f

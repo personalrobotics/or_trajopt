@@ -131,12 +131,13 @@ class TrajoptPlanner(BasePlanner):
             # that stores optimization problem.
             s = json.dumps(request)
             prob = trajoptpy.ConstructProblem(s, internal_env)
+            prob.SetRobotActiveDOFs()
 
             # Perform trajectory optimization.
             t_start = time.time()
             result = trajoptpy.OptimizeProblem(prob)
             t_elapsed = time.time() - t_start
-            logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
+            logger.debug("Optimization took {:.3f} s.".format(t_elapsed))
 
             # Check for constraint violations.
             for name, error in result.GetConstraints():
@@ -151,18 +152,13 @@ class TrajoptPlanner(BasePlanner):
             if waypoints is None:
                 raise PlanningError("Trajectory result was empty.")
 
-            # Verify the trajectory and return it as a result.
+            # Check that trajectory is collision free
             from trajoptpy.check_traj import traj_is_safe
-            with internal_robot:
-                # Set robot DOFs to match DOFs in optimization problem
-                prob.SetRobotActiveDOFs()
+            if not traj_is_safe(waypoints, internal_robot):
+                raise PlanningError("Result was in collision.")
 
-                # Check that trajectory is collision free
-                if not traj_is_safe(waypoints, internal_robot):
-                    raise PlanningError("Result was in collision.")
-
-        # Convert the waypoints to a trajectory.
-        return self._WaypointsToTraj(robot, waypoints)
+            # Convert the waypoints to a trajectory.
+            return self._WaypointsToTraj(internal_robot, waypoints)
 
     @PlanningMethod
     def PlanToConfiguration(self, robot, goal, **kwargs):
@@ -245,87 +241,85 @@ class TrajoptPlanner(BasePlanner):
 
     def _PlanToIK(self, robot, pose,
                   ranker=None, **kwargs):
-
         # Plan using the active manipulator.
-        with robot.GetEnv():
+        p = openravepy.KinBody.SaveParameters
+        with robot.CreateRobotStateSaver(p.ActiveDOF):
             manipulator = robot.GetActiveManipulator()
+            robot.SetActiveDOFs(manipulator.GetArmIndices())
 
             # Distance from current configuration is default ranking.
             if ranker is None:
                 from prpy.ik_ranking import NominalConfiguration
                 ranker = NominalConfiguration(manipulator.GetArmDOFValues())
 
-        # Find initial collision-free IK solution.
-        from openravepy import (IkFilterOptions,
-                                IkParameterization,
-                                IkParameterizationType)
-        ik_param = IkParameterization(
-            pose, IkParameterizationType.Transform6D)
-        ik_solutions = manipulator.FindIKSolutions(
-            ik_param, IkFilterOptions.CheckEnvCollisions)
-        if not len(ik_solutions):
-            raise PlanningError('No collision-free IK solution.')
+            # Find initial collision-free IK solution.
+            from openravepy import (IkFilterOptions,
+                                    IkParameterization,
+                                    IkParameterizationType)
+            ik_param = IkParameterization(
+                pose, IkParameterizationType.Transform6D)
+            ik_solutions = manipulator.FindIKSolutions(
+                ik_param, IkFilterOptions.CheckEnvCollisions)
+            if not len(ik_solutions):
+                raise PlanningError('No collision-free IK solution.')
 
-        # Sort the IK solutions in ascending order by the costs returned by the
-        # ranker. Lower cost solutions are better and infinite cost solutions
-        # are assumed to be infeasible.
-        scores = ranker(robot, ik_solutions)
-        best_idx = numpy.argmin(scores)
-        init_joint_config = ik_solutions[best_idx]
+            # Sort the IK solutions in ascending order by the costs returned
+            # by the ranker. Lower cost solutions are better and infinite cost
+            # solutions are assumed to be infeasible.
+            scores = ranker(robot, ik_solutions)
+            best_idx = numpy.argmin(scores)
+            init_joint_config = ik_solutions[best_idx]
 
-        # Convert IK endpoint transformation to pose.
-        goal_position = pose[0:3, 3].tolist()
-        goal_rotation = openravepy.quatFromRotationMatrix(pose).tolist()
+            # Convert IK endpoint transformation to pose.
+            goal_position = pose[0:3, 3].tolist()
+            goal_rotation = openravepy.quatFromRotationMatrix(pose).tolist()
 
-        # Settings for TrajOpt
-        num_steps = 10
+            # Settings for TrajOpt
+            num_steps = 10
 
-        # Construct a planning request with these constraints.
-        request = {
-            "basic_info": {
-                "n_steps": num_steps,
-                "manip": "active",
-                "start_fixed": True
-            },
-            "costs": [
-                {
-                    "type": "joint_vel",
-                    "params": {"coeffs": [1]}
+            # Construct a planning request with these constraints.
+            request = {
+                "basic_info": {
+                    "n_steps": num_steps,
+                    "manip": "active",
+                    "start_fixed": True
                 },
-                {
-                    "type": "collision",
-                    "params": {
-                        "coeffs": [20],
-                        "dist_pen": [0.025]
+                "costs": [
+                    {
+                        "type": "joint_vel",
+                        "params": {"coeffs": [1]}
                     },
-                }
-            ],
-            "constraints": [
-                {
-                    "type": "pose",
-                    "params": {
-                        "xyz": goal_position,
-                        "wxyz": goal_rotation,
-                        "link": manipulator.GetEndEffector().GetName(),
-                        "timestep": num_steps-1
+                    {
+                        "type": "collision",
+                        "params": {
+                            "coeffs": [20],
+                            "dist_pen": [0.025]
+                        },
                     }
+                ],
+                "constraints": [
+                    {
+                        "type": "pose",
+                        "params": {
+                            "xyz": goal_position,
+                            "wxyz": goal_rotation,
+                            "link": manipulator.GetEndEffector().GetName(),
+                            "timestep": num_steps-1
+                        }
+                    }
+                ],
+                "init_info": {
+                    "type": "straight_line",
+                    "endpoint": init_joint_config.tolist()
                 }
-            ],
-            "init_info": {
-                "type": "straight_line",
-                "endpoint": init_joint_config.tolist()
             }
-        }
 
-        # Set active DOFs to match active manipulator and plan.
-        p = openravepy.KinBody.SaveParameters
-        with robot.CreateRobotStateSaver(p.ActiveDOF):
-            robot.SetActiveDOFs(manipulator.GetArmIndices())
+            # Plan with active DOFs set to match active manipulator.
             return self._Plan(robot, request, **kwargs)
 
     @PlanningMethod
     def PlanToTSR(self, robot, tsrchains,
-                  interactive=False, constraint_threshold=1e-4, **kw_args):
+                  interactive=False, constraint_threshold=1e-3, **kw_args):
         """
         Plan using the given list of TSR chains with TrajOpt.
 
@@ -340,126 +334,132 @@ class TrajoptPlanner(BasePlanner):
         import trajoptpy
 
         # Plan using the active manipulator.
-        with robot.GetEnv():
+        p = openravepy.KinBody.SaveParameters
+        with robot.CreateRobotStateSaver(p.ActiveDOF):
             manipulator = robot.GetActiveManipulator()
+            robot.SetActiveDOFs(manipulator.GetArmIndices())
 
             # Distance from current configuration is default ranking.
             from prpy.ik_ranking import NominalConfiguration
             ranker = NominalConfiguration(manipulator.GetArmDOFValues())
 
-        # Define trajectory parameters.
-        n_dofs = len(manipulator.GetArmIndices())
-        n_steps = 20
+            # Define trajectory parameters.
+            n_dofs = len(manipulator.GetArmIndices())
+            n_steps = 20
 
-        # Create separate lists for the goal and trajectory-wide constraints.
-        goal_tsrs = [t for t in tsrchains if t.sample_goal]
-        traj_tsrs = [t for t in tsrchains if t.constrain]
+            # Create lists for the goal and trajectory-wide constraints.
+            goal_tsrs = [t for t in tsrchains if t.sample_goal]
+            traj_tsrs = [t for t in tsrchains if t.constrain]
 
-        # Find an initial collision-free IK solution by sampling goal TSRs.
-        from openravepy import (IkFilterOptions,
-                                IkParameterization,
-                                IkParameterizationType)
-        for tsr in constraints._TsrSampler(goal_tsrs):
-            ik_param = IkParameterization(
-                tsr.sample(), IkParameterizationType.Transform6D)
-            ik_solutions = manipulator.FindIKSolutions(
-                ik_param, IkFilterOptions.CheckEnvCollisions)
-            if len(ik_solutions):
-                break
-        if not len(ik_solutions):
-            raise PlanningError('No collision-free goals were found.')
+            # Find an initial collision-free IK solution by sampling goal TSRs.
+            from openravepy import (IkFilterOptions,
+                                    IkParameterization,
+                                    IkParameterizationType)
+            for tsr in constraints._TsrSampler(goal_tsrs):
+                ik_param = IkParameterization(
+                    tsr.sample(), IkParameterizationType.Transform6D)
+                ik_solutions = manipulator.FindIKSolutions(
+                    ik_param, IkFilterOptions.CheckEnvCollisions)
+                if len(ik_solutions):
+                    break
+            if not len(ik_solutions):
+                raise PlanningError('No collision-free goals were found.')
 
-        # Sort the IK solutions in ascending order by the costs returned by the
-        # ranker. Lower cost solutions are better and infinite cost solutions
-        # are assumed to be infeasible.
-        scores = ranker(robot, ik_solutions)
-        best_idx = numpy.argmin(scores)
-        init_joint_config = ik_solutions[best_idx]
+            # Sort the IK solutions in ascending order by the costs returned
+            # by the ranker. Lower cost solutions are better and infinite cost
+            # solutions are assumed to be infeasible.
+            scores = ranker(robot, ik_solutions)
+            best_idx = numpy.argmin(scores)
+            init_joint_config = ik_solutions[best_idx]
 
-        # Construct a planning request with these constraints.
-        request = {
-            "basic_info": {
-                "n_steps": n_steps,
-                "manip": "active",
-                "start_fixed": True
-            },
-            "costs": [
-                {
-                    "type": "joint_vel",
-                    "params": {"coeffs": [1]}
+            # Construct a planning request with these constraints.
+            request = {
+                "basic_info": {
+                    "n_steps": n_steps,
+                    "manip": "active",
+                    "start_fixed": True
                 },
-                {
-                    "type": "collision",
-                    "params": {
-                        "coeffs": [20],
-                        "dist_pen": [0.025]
+                "costs": [
+                    {
+                        "type": "joint_vel",
+                        "params": {"coeffs": [1]}
                     },
+                    {
+                        "type": "collision",
+                        "params": {
+                            "coeffs": [20],
+                            "dist_pen": [0.0025]
+                        },
+                    }
+                ],
+                "constraints": [],
+                "init_info": {
+                    "type": "straight_line",
+                    "endpoint": init_joint_config.tolist()
                 }
-            ],
-            "constraints": [],
-            "init_info": {
-                "type": "straight_line",
-                "endpoint": init_joint_config.tolist()
             }
-        }
 
-        # Set up environment.
-        env = robot.GetEnv()
-        trajoptpy.SetInteractive(interactive)
+            # Set up environment.
+            env = robot.GetEnv()
+            trajoptpy.SetInteractive(interactive)
 
-        # Trajopt's UserData gets confused if the same environment
-        # is cloned into multiple times, so create a fresh env here.
-        from prpy import Clone
-        with Clone(env) as internal_env:
-            internal_robot = internal_env.Cloned(robot)
-            internal_robot.SetActiveDOFs(manipulator.GetArmIndices())
+            # Trajopt's UserData gets confused if the same environment
+            # is cloned into multiple times, so create a fresh env here.
+            from prpy import Clone
+            with Clone(env) as internal_env:
+                internal_robot = internal_env.Cloned(robot)
 
-            # Convert dictionary into json-formatted string and create object
-            # that stores optimization problem.
-            s = json.dumps(request)
-            prob = trajoptpy.ConstructProblem(s, internal_env)
-
-            traj_constraint = constraints._TsrCostFn(internal_robot, traj_tsrs)
-            for t in xrange(1, n_steps):
-                prob.AddConstraint(traj_constraint,
-                                   [(t, j) for j in xrange(n_dofs)],
-                                   "EQ", "traj_tsr{:d}".format(t))
-
-            goal_constraint = constraints._TsrCostFn(internal_robot, goal_tsrs)
-            prob.AddConstraint(goal_constraint,
-                               [(n_steps-1, j) for j in xrange(n_dofs)],
-                               "EQ", "goal_tsr")
-
-            # Perform trajectory optimization.
-            t_start = time.time()
-            result = trajoptpy.OptimizeProblem(prob)
-            t_elapsed = time.time() - t_start
-            logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
-
-            # Check for constraint violations.
-            for name, error in result.GetConstraints():
-                if error > constraint_threshold:
-                    raise PlanningError(
-                        "Trajectory violates contraint '{:s}': {:f} > {:f}"
-                        .format(name, error, constraint_threshold)
-                    )
-
-            # Check for the returned trajectory.
-            waypoints = result.GetTraj()
-            if waypoints is None:
-                raise PlanningError("Trajectory result was empty.")
-
-            # Verify the trajectory and return it as a result.
-            from trajoptpy.check_traj import traj_is_safe
-            with internal_robot:
-                # Set robot DOFs to match DOFs in optimization problem
+                # Convert dictionary into json-formatted string and create
+                # object that stores optimization problem.
+                s = json.dumps(request)
+                prob = trajoptpy.ConstructProblem(s, internal_env)
                 prob.SetRobotActiveDOFs()
 
+                if len(traj_tsrs) > 0:
+                    traj_constraint = constraints._TsrCostFn(internal_robot,
+                                                             traj_tsrs)
+                    for t in xrange(1, n_steps):
+                        prob.AddConstraint(
+                            traj_constraint,
+                            [(t, j) for j in xrange(n_dofs)],
+                            "EQ", "traj_tsr{:d}".format(t)
+                        )
+
+                if len(goal_tsrs) > 0:
+                    goal_constraint = constraints._TsrCostFn(internal_robot,
+                                                             goal_tsrs)
+                    prob.AddConstraint(
+                        goal_constraint,
+                        [(n_steps-1, j) for j in xrange(n_dofs)],
+                        "EQ", "goal_tsr"
+                    )
+
+                # Perform trajectory optimization.
+                t_start = time.time()
+                result = trajoptpy.OptimizeProblem(prob)
+                t_elapsed = time.time() - t_start
+                logger.debug("Optimization took {:.3f} s.".format(t_elapsed))
+
+                # Check for constraint violations.
+                for name, error in result.GetConstraints():
+                    if error > constraint_threshold:
+                        raise PlanningError(
+                            "Trajectory violates contraint '{:s}': {:f} > {:f}"
+                            .format(name, error, constraint_threshold)
+                        )
+
+                # Check for the returned trajectory.
+                waypoints = result.GetTraj()
+                if waypoints is None:
+                    raise PlanningError("Trajectory result was empty.")
+
                 # Check that trajectory is collision free
+                from trajoptpy.check_traj import traj_is_safe
                 if not traj_is_safe(waypoints, internal_robot):
                     raise PlanningError("Result was in collision.")
 
-        return self._WaypointsToTraj(robot, waypoints)
+                # Return an OpenRAVE trajectory as a result.
+                return self._WaypointsToTraj(internal_robot, waypoints)
 
     # @PlanningMethod
     def BrokenPlanToEndEffectorOffset(self, robot, direction, distance,
