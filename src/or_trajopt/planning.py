@@ -151,15 +151,16 @@ class TrajoptPlanner(BasePlanner):
             if waypoints is None:
                 raise PlanningError("Trajectory result was empty.")
 
-            # Verify the trajectory and return it as a result.
-            from trajoptpy.check_traj import traj_is_safe
-            with internal_robot:
-                # Set robot DOFs to match DOFs in optimization problem
+            # Set active DOFs to match active manipulator and plan.
+            p = openravepy.KinBody.SaveParameters
+            with internal_robot.CreateRobotStateSaver(p.ActiveDOF):
+                # Set robot DOFs to DOFs in optimization problem
                 prob.SetRobotActiveDOFs()
 
                 # Check that trajectory is collision free
-                if not traj_is_safe(waypoints, internal_robot):
-                    raise PlanningError("Result was in collision.")
+                from trajoptpy.check_traj import traj_is_safe
+                if not traj_is_safe(waypoints, robot):
+                    return PlanningError("Result was in collision.")
 
         # Convert the waypoints to a trajectory.
         return self._WaypointsToTraj(robot, waypoints)
@@ -419,15 +420,18 @@ class TrajoptPlanner(BasePlanner):
         if waypoints is None:
             raise PlanningError("Trajectory result was empty.")
 
-        # Verify the trajectory and return it as a result.
-        from trajoptpy.check_traj import traj_is_safe
-        with env:
+        # Set active DOFs to match active manipulator and plan.
+        p = openravepy.KinBody.SaveParameters
+        with robot.CreateRobotStateSaver(p.ActiveDOF):
             # Set robot DOFs to DOFs in optimization problem
             prob.SetRobotActiveDOFs()
 
             # Check that trajectory is collision free
+            from trajoptpy.check_traj import traj_is_safe
             if not traj_is_safe(waypoints, robot):
                 return PlanningError("Result was in collision.")
+        
+        # Convert the waypoints to a trajectory.
         return self._WaypointsToTraj(robot, waypoints)
 
     # @PlanningMethod
