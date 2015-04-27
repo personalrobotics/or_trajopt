@@ -160,7 +160,7 @@ class TrajoptPlanner(BasePlanner):
                 # Check that trajectory is collision free
                 from trajoptpy.check_traj import traj_is_safe
                 if not traj_is_safe(waypoints, robot):
-                    return PlanningError("Result was in collision.")
+                    raise PlanningError("Result was in collision.")
 
         # Convert the waypoints to a trajectory.
         return self._WaypointsToTraj(robot, waypoints)
