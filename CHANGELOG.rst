@@ -2,8 +2,8 @@
 Changelog for package or_trajopt
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.0.0 (2015-05-01)
+------------------
 * Fixed `return` instead of `raise` PlanningError.
 * Fixes bug where robot active DOFs were changed.
   This adds state savers around all ActiveDOF calls (one was missing) to make sure that none of the trajopt planning calls have persistent effects on the robot.
