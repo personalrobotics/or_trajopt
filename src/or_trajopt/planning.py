@@ -15,6 +15,12 @@ from . import constraints
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
 
+# Keys under which Trajopt stores custom UserData.
+TRAJOPT_USERDATA_KEYS = ['trajopt_cc', 'bt_use_trimesh', 'osg', 'bt']
+
+# Environment objects within which Trajopt stores custom UserData.
+TRAJOPT_ENV_USERDATA = '__trajopt_data__'
+
 
 class TrajoptWrapper(MetaPlanner):
     def __init__(self, planner):
@@ -122,45 +128,49 @@ class TrajoptPlanner(BasePlanner):
         trajoptpy.SetInteractive(interactive)
 
         # Trajopt's UserData gets confused if the same environment
-        # is cloned into multiple times, so create a fresh env here.
-        from prpy import Clone
-        with Clone(env) as internal_env:
-            internal_robot = internal_env.Cloned(robot)
+        # is cloned into multiple times, so remove all trajopt keys.
+        for body in env.GetBodies():
+            for key in TRAJOPT_USERDATA_KEYS:
+                body.RemoveUserData(key)
 
-            # Convert dictionary into json-formatted string and create object
-            # that stores optimization problem.
-            s = json.dumps(request)
-            prob = trajoptpy.ConstructProblem(s, internal_env)
+        trajopt_env_userdata = env.GetKinBody('__trajopt_data__')
+        if trajopt_env_userdata is not None:
+            env.Remove(trajopt_env_userdata)
 
-            # Perform trajectory optimization.
-            t_start = time.time()
-            result = trajoptpy.OptimizeProblem(prob)
-            t_elapsed = time.time() - t_start
-            logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
+        # Convert dictionary into json-formatted string and create object
+        # that stores optimization problem.
+        s = json.dumps(request)
+        prob = trajoptpy.ConstructProblem(s, env)
 
-            # Check for constraint violations.
-            for name, error in result.GetConstraints():
-                if error > constraint_threshold:
-                    raise PlanningError(
-                        "Trajectory violates contraint '{:s}': {:f} > {:f}"
-                        .format(name, error, constraint_threshold)
-                    )
+        # Perform trajectory optimization.
+        t_start = time.time()
+        result = trajoptpy.OptimizeProblem(prob)
+        t_elapsed = time.time() - t_start
+        logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
 
-            # Check for the returned trajectory.
-            waypoints = result.GetTraj()
-            if waypoints is None:
-                raise PlanningError("Trajectory result was empty.")
+        # Check for constraint violations.
+        for name, error in result.GetConstraints():
+            if error > constraint_threshold:
+                raise PlanningError(
+                    "Trajectory violates contraint '{:s}': {:f} > {:f}"
+                    .format(name, error, constraint_threshold)
+                )
 
-            # Set active DOFs to match active manipulator and plan.
-            p = openravepy.KinBody.SaveParameters
-            with internal_robot.CreateRobotStateSaver(p.ActiveDOF):
-                # Set robot DOFs to DOFs in optimization problem
-                prob.SetRobotActiveDOFs()
+        # Check for the returned trajectory.
+        waypoints = result.GetTraj()
+        if waypoints is None:
+            raise PlanningError("Trajectory result was empty.")
 
-                # Check that trajectory is collision free
-                from trajoptpy.check_traj import traj_is_safe
-                if not traj_is_safe(waypoints, robot):
-                    raise PlanningError("Result was in collision.")
+        # Set active DOFs to match active manipulator and plan.
+        p = openravepy.KinBody.SaveParameters
+        with robot.CreateRobotStateSaver(p.ActiveDOF):
+            # Set robot DOFs to DOFs in optimization problem
+            prob.SetRobotActiveDOFs()
+
+            # Check that trajectory is collision free
+            from trajoptpy.check_traj import traj_is_safe
+            if not traj_is_safe(waypoints, robot):
+                raise PlanningError("Result was in collision.")
 
         # Convert the waypoints to a trajectory.
         return self._WaypointsToTraj(robot, waypoints)
