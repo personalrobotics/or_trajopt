@@ -152,17 +152,17 @@ class TrajoptPlanner(BasePlanner):
         if isinstance(fntype, ConstraintType):
             if dfdx is not None:
                 problem.AddConstraint(f, dfdx, [(timestep, i) for i in inds],
-                                      fntype, fnname)
+                                      fntype.value, fnname)
             else:
                 problem.AddConstraint(f, [(timestep, i) for i in inds],
-                                      fntype, fnname)
+                                      fntype.value, fnname)
         elif isinstance(fntype, CostType):
             if dfdx is not None:
-                problem.AddConstraint(f, dfdx, [(timestep, i) for i in inds],
-                                      fntype, fnname)
+                problem.AddErrorCost(f, dfdx, [(timestep, i) for i in inds],
+                                     fntype.value, fnname)
             else:
-                problem.AddConstraint(f, [(timestep, i) for i in inds],
-                                      fntype, fnname)
+                problem.AddErrorCost(f, [(timestep, i) for i in inds],
+                                     fntype.value, fnname)
         else:
             ValueError('Invalid cost or constraint type: {:s}'
                        .format(str(fntype)))
