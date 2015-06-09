@@ -5,6 +5,7 @@ from prpy.planning.base import (BasePlanner,
                                 MetaPlanner,
                                 PlanningError,
                                 PlanningMethod)
+import enum
 import logging
 import numpy
 import time
@@ -14,6 +15,38 @@ from . import constraints
 
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
+
+# Keys under which Trajopt stores custom UserData.
+TRAJOPT_USERDATA_KEYS = ['trajopt_cc', 'bt_use_trimesh', 'osg', 'bt']
+
+# Environment objects within which Trajopt stores custom UserData.
+TRAJOPT_ENV_USERDATA = '__trajopt_data__'
+
+
+@enum.unique
+class ConstraintType(enum.Enum):
+    """
+    Constraint function types supported by TrajOpt.
+
+    * EQ: an equality constraint. `f(x) == 0` in a valid solution.
+    * INEQ: an inequality constraint. `f(x) >= `0` in a valid solution.
+    """
+    EQ = 'EQ'
+    INEQ = 'INEQ'
+
+
+@enum.unique
+class CostType(enum.Enum):
+    """
+    Cost function types supported by TrajOpt.
+
+    * SQUARED: minimize `f(x)^2`
+    * ABS: minimize `abs(f(x))`
+    * HINGE: minimize `f(x)` while `f(x) > 0`
+    """
+    SQUARED = 'SQUARED'
+    ABS = 'ABS'
+    HINGE = 'HINGE'
 
 
 class TrajoptWrapper(MetaPlanner):
@@ -98,8 +131,47 @@ class TrajoptPlanner(BasePlanner):
     def __str__(self):
         return 'Trajopt'
 
-    def _Plan(self, robot, request, interactive=False,
-              constraint_threshold=1e-4, **kwargs):
+    @staticmethod
+    def _addFunction(problem, timestep, i_dofs, n_dofs, fnargs):
+        """ Converts dict of function parameters into cost or constraint. """
+        f = fnargs.get('f')
+        assert f is not None
+
+        fntype = fnargs.get('type')
+        assert fntype is not None
+
+        fnname = "{:s}{:d}".format(str(fnargs['f']), timestep)
+        dfdx = fnargs.get('dfdx')
+        dofs = fnargs.get('dofs')
+        inds = ([i_dofs.index(dof) for dof in dofs]
+                if dofs is not None else range(n_dofs))
+
+        # Trajopt problem function signatures:
+        # - AddConstraint(f, [df], ijs, typestr, name)
+        # - AddErrCost(f, [df], ijs, typestr, name)
+        if isinstance(fntype, ConstraintType):
+            if dfdx is not None:
+                problem.AddConstraint(f, dfdx, [(timestep, i) for i in inds],
+                                      fntype.value, fnname)
+            else:
+                problem.AddConstraint(f, [(timestep, i) for i in inds],
+                                      fntype.value, fnname)
+        elif isinstance(fntype, CostType):
+            if dfdx is not None:
+                problem.AddErrorCost(f, dfdx, [(timestep, i) for i in inds],
+                                     fntype.value, fnname)
+            else:
+                problem.AddErrorCost(f, [(timestep, i) for i in inds],
+                                     fntype.value, fnname)
+        else:
+            ValueError('Invalid cost or constraint type: {:s}'
+                       .format(str(fntype)))
+
+    def _Plan(self, robot, request,
+              traj_constraints=(), goal_constraints=(),
+              traj_costs=(), goal_costs=(),
+              interactive=False, constraint_threshold=1e-4,
+              **kwargs):
         """
         Plan to a desired configuration with Trajopt.
 
@@ -107,12 +179,43 @@ class TrajoptPlanner(BasePlanner):
         JSON request. This can be used to implement custom path optimization
         algorithms.
 
-        @param robot the robot whose active DOFs will be used
-        @param request a JSON planning request for Trajopt
-        @param interactive pause every iteration, until you press 'p'
-                              or press escape to disable further plotting
-        @param constraint_threshold acceptable per-constraint violation error
-        @return traj a trajectory from current configuration to specified goal
+        Constraints and costs are specified as dicts of:
+            ```
+            {
+                'f': [float] -> [float],
+                'dfdx': [float] -> [float],
+                'type': ConstraintType or CostType
+                'dofs': [int]
+            }
+            ```
+
+        The input to f(x) and dfdx(x) is a vector of active DOF values used in
+        the planning problem.  The output is a vector of costs, where the
+        value *increases* as a constraint or a cost function is violated or
+        unsatisfied.
+
+        See ConstraintType and CostType for descriptions of the various
+        function specifications and their expected behavior.
+
+        The `dofs` parameter can be used to specify a subset of the robot's
+        DOF indices that should be used. A ValueError is thrown if these
+        indices are not entirely contained in the current active DOFs of the
+        robot.
+
+        @param robot: the robot whose active DOFs will be used
+        @param request: a JSON planning request for Trajopt
+        @param traj_constraints: list of dicts of constraints that should be
+                                 applied over the whole trajectory
+        @param goal_constraints: list of dicts of constraints that should be
+                                 applied only at the last waypoint
+        @param traj_costs: list of dicts of costs that should be applied over
+                           the whole trajectory
+        @param goal_costs: list of dicts of costs that should be applied only
+                           at the last waypoint
+        @param interactive: pause every iteration, until you press 'p' or press
+                           escape to disable further plotting
+        @param constraint_threshold: acceptable per-constraint violation error
+        @returns traj: trajectory from current configuration to specified goal
         """
         import json
         import trajoptpy
@@ -122,15 +225,33 @@ class TrajoptPlanner(BasePlanner):
         trajoptpy.SetInteractive(interactive)
 
         # Trajopt's UserData gets confused if the same environment
-        # is cloned into multiple times, so create a fresh env here.
-        from prpy import Clone
-        with Clone(env) as internal_env:
-            internal_robot = internal_env.Cloned(robot)
-
+        # is cloned into multiple times, so create a scope to later
+        # remove all TrajOpt UserData keys.
+        try:
             # Convert dictionary into json-formatted string and create object
             # that stores optimization problem.
             s = json.dumps(request)
-            prob = trajoptpy.ConstructProblem(s, internal_env)
+            prob = trajoptpy.ConstructProblem(s, env)
+
+            assert(request['basic_info']['manip'] == 'active')
+            assert(request['basic_info']['n_steps'] is not None)
+            n_steps = request['basic_info']['n_steps']
+            n_dofs = robot.GetActiveDOF()
+            i_dofs = robot.GetActiveDOFIndices()
+
+            # Add trajectory-wide costs and constraints to each timestep.
+            for t in xrange(1, n_steps):
+                for constraint in traj_constraints:
+                    self._addFunction(prob, t, i_dofs, n_dofs, constraint)
+                for cost in traj_costs:
+                    self._addFunction(prob, t, i_dofs, n_dofs, cost)
+
+            # Add goal costs and constraints.
+            for constraint in goal_constraints:
+                self._addFunction(prob, n_steps-1, i_dofs, n_dofs, constraint)
+
+            for cost in goal_costs:
+                self._addFunction(prob, n_steps-1, i_dofs, n_dofs, cost)
 
             # Perform trajectory optimization.
             t_start = time.time()
@@ -153,7 +274,7 @@ class TrajoptPlanner(BasePlanner):
 
             # Set active DOFs to match active manipulator and plan.
             p = openravepy.KinBody.SaveParameters
-            with internal_robot.CreateRobotStateSaver(p.ActiveDOF):
+            with robot.CreateRobotStateSaver(p.ActiveDOF):
                 # Set robot DOFs to DOFs in optimization problem
                 prob.SetRobotActiveDOFs()
 
@@ -162,8 +283,16 @@ class TrajoptPlanner(BasePlanner):
                 if not traj_is_safe(waypoints, robot):
                     raise PlanningError("Result was in collision.")
 
-        # Convert the waypoints to a trajectory.
-        return self._WaypointsToTraj(robot, waypoints)
+            # Convert the waypoints to a trajectory.
+            return self._WaypointsToTraj(robot, waypoints)
+        finally:
+            for body in env.GetBodies():
+                for key in TRAJOPT_USERDATA_KEYS:
+                    body.RemoveUserData(key)
+
+            trajopt_env_userdata = env.GetKinBody('__trajopt_data__')
+            if trajopt_env_userdata is not None:
+                env.Remove(trajopt_env_userdata)
 
     @PlanningMethod
     def PlanToConfiguration(self, robot, goal, **kwargs):
@@ -430,7 +559,7 @@ class TrajoptPlanner(BasePlanner):
             from trajoptpy.check_traj import traj_is_safe
             if not traj_is_safe(waypoints, robot):
                 return PlanningError("Result was in collision.")
-        
+
         # Convert the waypoints to a trajectory.
         return self._WaypointsToTraj(robot, waypoints)
 
