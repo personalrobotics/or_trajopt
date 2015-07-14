@@ -143,7 +143,7 @@ class TrajoptPlanner(BasePlanner):
         fnname = "{:s}{:d}".format(str(fnargs['f']), timestep)
         dfdx = fnargs.get('dfdx')
         dofs = fnargs.get('dofs')
-        inds = ([i_dofs.index(dof) for dof in dofs]
+        inds = ([list(i_dofs).index(dof) for dof in dofs]
                 if dofs is not None else range(n_dofs))
 
         # Trajopt problem function signatures:
