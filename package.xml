@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<package>
+<package format="2">
   <name>or_trajopt</name>
   <version>1.0.0</version>
   <description>OpenRAVE prpy bindings for TrajOpt</description>
@@ -10,17 +10,11 @@
   <author email="pkv@cs.cmu.edu">Pras Velagapudi</author>
 
   <buildtool_depend>catkin</buildtool_depend>
-  <build_depend>boost</build_depend>
-  <build_depend>cmake_modules</build_depend>
-  <build_depend>eigen</build_depend>
-  <build_depend>libopenscenegraph</build_depend>
-  <build_depend>openrave</build_depend>
-  <build_depend>openrave_catkin</build_depend>
-  <run_depend>boost</run_depend>
-  <run_depend>libopenscenegraph</run_depend>
-  <run_depend>openrave</run_depend>
-  <run_depend>openrave_catkin</run_depend>
-  <run_depend>python-numpy</run_depend>
-
-  <export/>
+  <depend>boost</depend>
+  <depend>cmake_modules</depend>
+  <depend>eigen</depend>
+  <depend>libopenscenegraph</depend>
+  <depend>openrave</depend>
+  <depend>openrave_catkin</depend>
+  <exec_depend>python-numpy</exec_depend>
 </package>
