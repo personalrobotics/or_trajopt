@@ -464,10 +464,11 @@ class TrajoptPlanner(BasePlanner):
                            or press escape to disable further plotting
         @return traj
         """
+        n_steps = 20
+
         # Plan using the active manipulator.
         with robot.GetEnv():
             manipulator = robot.GetActiveManipulator()
-            n_steps = 20
 
             # Create lists for the goal and trajectory-wide constraints.
             goal_tsrchains = [t for t in tsrchains if t.sample_goal]
