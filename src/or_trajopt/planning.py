@@ -29,7 +29,7 @@ class ConstraintType(enum.Enum):
     Constraint function types supported by TrajOpt.
 
     * EQ: an equality constraint. `f(x) == 0` in a valid solution.
-    * INEQ: an inequality constraint. `f(x) >= `0` in a valid solution.
+    * INEQ: an inequality constraint. `f(x) <= `0` in a valid solution.
     """
     EQ = 'EQ'
     INEQ = 'INEQ'
@@ -476,14 +476,14 @@ class TrajoptPlanner(BasePlanner):
 
             # `OR` together all of the goal tsrchains.
             kwargs.setdefault('goal_constraints', []).append(
-                {'f': constraints._TsrCostFn(robot, goal_tsrchains),
-                 'type': ConstraintType.EQ}
+                {'f': constraints._TsrConstraintFn(robot, goal_tsrchains),
+                 'type': ConstraintType.INEQ}
             )
 
             # `AND` together all of the trajectory-wide tsrchains.
             kwargs.setdefault('traj_constraints', []).extend(
-                {'f': constraints._TsrCostFn(robot, tsrchain),
-                 'type': ConstraintType.EQ}
+                {'f': constraints._TsrConstraintFn(robot, tsrchain),
+                 'type': ConstraintType.INEQ}
                 for tsrchain in traj_tsrchains
             )
 

@@ -14,8 +14,8 @@ def _TsrSampler(tsrchains, timelimit=2.0):
         lambda v: time.time() < tsr_timelimit, tsr_cycler)
 
 
-def _TsrCostFn(robot, tsrchain_list):
-    """ Generates a cost function for a list of TSR chains.
+def _TsrConstraintFn(robot, tsrchain_list):
+    """ Generates a constraint function for a list of TSR chains.
 
     This function returns the minimum projected Euclidean distance to the
     closest TSR in a TSR set.
