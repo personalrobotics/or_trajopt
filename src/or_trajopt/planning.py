@@ -477,13 +477,13 @@ class TrajoptPlanner(BasePlanner):
             # `OR` together all of the goal tsrchains.
             kwargs.setdefault('goal_constraints', []).append(
                 {'f': constraints._TsrConstraintFn(robot, goal_tsrchains),
-                 'type': ConstraintType.INEQ}
+                 'type': ConstraintType.EQ}
             )
 
             # `AND` together all of the trajectory-wide tsrchains.
             kwargs.setdefault('traj_constraints', []).extend(
                 {'f': constraints._TsrConstraintFn(robot, tsrchain),
-                 'type': ConstraintType.INEQ}
+                 'type': ConstraintType.EQ}
                 for tsrchain in traj_tsrchains
             )
 
