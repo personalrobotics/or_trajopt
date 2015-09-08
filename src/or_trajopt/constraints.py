@@ -20,37 +20,11 @@ def _TsrCostFn(robot, tsrchain_list):
     This function returns the minimum projected Euclidean distance to the
     closest TSR in a TSR set.
     """
-    import prpy.tsr.kin as kin
-    XYZYPR_TO_XYZRPY = [0, 1, 2, 5, 4, 3]
-
-    # I don't know how to project onto TSR chains...
-    for tsrchain in tsrchain_list:
-        if len(tsrchain.TSRs) > 0:
-            raise ValueError("Cannot project TSR chain.")
-    tsrlist = [tsrchain.TSRs[0] for tsrchain in tsrchain_list]
-
-    # Create a joint constraint function over all TSRs.
+    # Create a joint constraint function over all TSR chains.
     def f(x):
         robot.SetActiveDOFValues(x)
         Te = robot.GetActiveManipulator().GetEndEffectorTransform()
-
-        d = []
-        for tsr in tsrlist:
-            # Compute the transform from Tw to Tw_target. This is the
-            # residual in the task frame, which is constrained by Bw.
-            Tw_target = numpy.dot(Te, numpy.linalg.inv(tsr.Tw_e))
-            Tw_relative = numpy.dot(numpy.linalg.inv(tsr.T0_w), Tw_target)
-
-            # Compute distance from the Bw AABB.
-            xyzypr = kin.pose_to_xyzypr(Tw_relative)
-            xyzrpy = xyzypr[XYZYPR_TO_XYZRPY]
-
-            distance_vector = numpy.maximum(
-                numpy.maximum(xyzrpy - tsr.Bw[:, 1], numpy.zeros(6)),
-                numpy.maximum(tsr.Bw[:, 1] - xyzrpy, numpy.zeros(6))
-            )
-            d.append(numpy.linalg.norm(distance_vector, ord=2))
-
+        d = [tsrchain.distance(Te) for tsrchain in tsrchain_list]
         return numpy.min(d)
 
     # Return the constraint function itself.
