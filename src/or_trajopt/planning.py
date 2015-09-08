@@ -493,7 +493,7 @@ class TrajoptPlanner(BasePlanner):
         for tsr in constraints._TsrSampler(goal_tsrchains):
             ik_param = IkParameterization(
                 tsr.sample(), IkParameterizationType.Transform6D)
-            init_joint_config = manipulator.FindIKSolutions(
+            init_joint_config = manipulator.FindIKSolution(
                 ik_param, IkFilterOptions.CheckEnvCollisions)
             if init_joint_config is not None:
                 break
@@ -531,9 +531,8 @@ class TrajoptPlanner(BasePlanner):
         p = openravepy.KinBody.SaveParameters
         with robot.CreateRobotStateSaver(p.ActiveDOF):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
-            return self._Plan(robot, request,
-                # `traj_constraints` and `goal_constraints` are in `kwargs`
-                **kwargs)
+            # `traj_constraints` and `goal_constraints` are in `kwargs`
+            return self._Plan(robot, request, **kwargs)
 
     # @PlanningMethod
     def PlanToEndEffectorOffset(self, robot, direction, distance,

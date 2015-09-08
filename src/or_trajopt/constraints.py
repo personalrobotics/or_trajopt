@@ -24,7 +24,7 @@ def _TsrCostFn(robot, tsrchain_list):
     def f(x):
         robot.SetActiveDOFValues(x)
         Te = robot.GetActiveManipulator().GetEndEffectorTransform()
-        d = [tsrchain.distance(Te) for tsrchain in tsrchain_list]
+        d = [tsrchain.distance(Te)[0] for tsrchain in tsrchain_list]
         return numpy.min(d)
 
     # Return the constraint function itself.
