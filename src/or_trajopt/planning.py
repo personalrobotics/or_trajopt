@@ -1,17 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from prpy.planning.base import (BasePlanner,
-                                MetaPlanner,
-                                PlanningError,
-                                PlanningMethod)
 import enum
 import logging
 import numpy
 import time
 import openravepy
 import os
+import prpy.util
 from . import constraints
+from prpy.planning.base import (BasePlanner,
+                                MetaPlanner,
+                                PlanningError,
+                                PlanningMethod,
+                                Tags)
 
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
@@ -284,7 +286,11 @@ class TrajoptPlanner(BasePlanner):
                     raise PlanningError("Result was in collision.")
 
             # Convert the waypoints to a trajectory.
-            return self._WaypointsToTraj(robot, waypoints)
+            path = self._WaypointsToTraj(robot, waypoints)
+            prpy.util.SetTrajectoryTags(path, {
+                    Tags.SMOOTH: True
+                }, append=True)
+            return path
         finally:
             for body in env.GetBodies():
                 for key in TRAJOPT_USERDATA_KEYS:
