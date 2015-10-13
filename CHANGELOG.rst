@@ -2,6 +2,14 @@
 Changelog for package or_trajopt
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* Added 'smooth' tag to all trajopt trajectories (`#9 <https://github.com/personalrobotics/or_trajopt/issues/9>`_)
+* Updated package.xml file to format 2 (`#7 <https://github.com/personalrobotics/or_trajopt/issues/7>`_)
+* Removed extra clone operation inside Trajopt (`#4 <https://github.com/personalrobotics/or_trajopt/issues/4>`_)
+* Exported constraint and cost types in the main Python module
+* Contributors: Michael Koval, Pras Velagapudi
+
 1.0.0 (2015-05-01)
 ------------------
 * Fixed `return` instead of `raise` PlanningError.
