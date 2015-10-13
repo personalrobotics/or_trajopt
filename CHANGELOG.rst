@@ -2,8 +2,8 @@
 Changelog for package or_trajopt
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.0.1 (2015-10-12)
+------------------
 * Added 'smooth' tag to all trajopt trajectories (`#9 <https://github.com/personalrobotics/or_trajopt/issues/9>`_)
 * Updated package.xml file to format 2 (`#7 <https://github.com/personalrobotics/or_trajopt/issues/7>`_)
 * Removed extra clone operation inside Trajopt (`#4 <https://github.com/personalrobotics/or_trajopt/issues/4>`_)
