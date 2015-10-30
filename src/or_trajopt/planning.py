@@ -14,6 +14,9 @@ from prpy.planning.base import (BasePlanner,
                                 PlanningError,
                                 PlanningMethod,
                                 Tags)
+from prpy.planning.exceptions import (CollisionPlanningError,
+                                    SelfCollisionPlanningError,
+                                    ConstraintViolationPlanningError)
 
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
@@ -264,10 +267,10 @@ class TrajoptPlanner(BasePlanner):
             # Check for constraint violations.
             for name, error in result.GetConstraints():
                 if error > constraint_threshold:
-                    raise PlanningError(
-                        "Trajectory violates contraint '{:s}': {:f} > {:f}"
-                        .format(name, error, constraint_threshold)
-                    )
+                    raise ConstraintViolationPlanningError(
+                        name,
+                        threshold = constraint_threshold,
+                        violation_by = error)
 
             # Check for the returned trajectory.
             waypoints = result.GetTraj()
@@ -281,9 +284,8 @@ class TrajoptPlanner(BasePlanner):
                 prob.SetRobotActiveDOFs()
 
                 # Check that trajectory is collision free
-                from trajoptpy.check_traj import traj_is_safe
-                if not traj_is_safe(waypoints, robot):
-                    raise PlanningError("Result was in collision.")
+                self._checkCollisionForIKSolutions(robot, waypoints)
+
 
             # Convert the waypoints to a trajectory.
             path = self._WaypointsToTraj(robot, waypoints)
@@ -400,7 +402,9 @@ class TrajoptPlanner(BasePlanner):
         ik_solutions = manipulator.FindIKSolutions(
             ik_param, IkFilterOptions.CheckEnvCollisions)
         if not len(ik_solutions):
-            raise PlanningError('No collision-free IK solution.')
+            # identify collision and raiseError
+            self._raiseCollisionErrorForPose(robot, pose)
+           
 
         # Sort the IK solutions in ascending order by the costs returned by the
         # ranker. Lower cost solutions are better and infinite cost solutions
@@ -487,14 +491,16 @@ class TrajoptPlanner(BasePlanner):
                                 IkParameterization,
                                 IkParameterizationType)
         for tsr in self._TsrSampler(goal_tsrs):
+            pose = tsr.sample()
             ik_param = IkParameterization(
-                tsr.sample(), IkParameterizationType.Transform6D)
+                pose, IkParameterizationType.Transform6D)
             init_joint_config = manipulator.FindIKSolutions(
                 ik_param, IkFilterOptions.CheckEnvCollisions)
             if init_joint_config:
                 break
         if not init_joint_config:
-            raise PlanningError('No collision-free IK solutions.')
+            #Use last pose for collision error
+            self._raiseCollisionErrorForPose(robot,  pose) 
 
         # Construct a planning request with these constraints.
         request = {
@@ -547,8 +553,7 @@ class TrajoptPlanner(BasePlanner):
 
         # Check for constraint violations.
         if result.GetConstraints():
-            raise PlanningError("Trajectory did not satisfy constraints: {:s}"
-                                .format(str(result.GetConstraints())))
+            raise ConstraintViolationPlanningError(str(result.GetConstraints()[0]))
 
         # Check for the returned trajectory.
         waypoints = result.GetTraj()
@@ -560,11 +565,8 @@ class TrajoptPlanner(BasePlanner):
         with robot.CreateRobotStateSaver(p.ActiveDOF):
             # Set robot DOFs to DOFs in optimization problem
             prob.SetRobotActiveDOFs()
-
             # Check that trajectory is collision free
-            from trajoptpy.check_traj import traj_is_safe
-            if not traj_is_safe(waypoints, robot):
-                return PlanningError("Result was in collision.")
+            self._checkCollisionForIKSolutions(robot, waypoints)
 
         # Convert the waypoints to a trajectory.
         return self._WaypointsToTraj(robot, waypoints)
@@ -632,3 +634,45 @@ class TrajoptPlanner(BasePlanner):
         for (i, waypoint) in enumerate(waypoints):
             traj.Insert(i, waypoint)
         return traj
+
+    def _raiseCollisionErrorForPose(self, robot, pose):
+        """ Identify collision for pose and raise error.
+        This will raise error even if no specific collision is found, 
+        so it should be called only when there is no IK solution. 
+        """
+        from openravepy import (IkFilterOptions,
+                                IkParameterization,
+                                IkParameterizationType)
+
+        manipulator = robot.GetActiveManipulator()
+
+        ik_param = IkParameterization(
+            pose, IkParameterizationType.Transform6D)
+
+        ik_solutions = manipulator.FindIKSolutions(
+            ik_param,
+            openravepy.IkFilterOptions.IgnoreSelfCollisions,
+            ikreturn=False,
+            releasegil=True
+            )
+
+        p = openravepy.KinBody.SaveParameters
+        with robot.CreateRobotStateSaver(p.ActiveDOF):
+            self._checkCollisionForIKSolutions(robot, ik_solutions)
+
+        raise PlanningError('No collision-free IK solution.')
+
+    def _checkCollisionForIKSolutions(self, robot, ik_solutions): 
+        """ Raise collision error if there is one in ik_solutions
+        Should be called while saving robot's curent state 
+        """
+        from openravepy import CollisionReport
+        manipulator = robot.GetActiveManipulator()    
+        for q in ik_solutions: 
+            robot.SetActiveDOFValues(q)
+            report = CollisionReport() 
+            env = robot.GetEnv()
+            if env.CheckCollision(robot, report=report): 
+                raise CollisionPlanningError.FromReport(report)
+            elif robot.CheckSelfCollision(report=report):
+                raise SelfCollisionPlanningError.FromReport(report)               
