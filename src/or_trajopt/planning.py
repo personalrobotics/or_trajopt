@@ -224,6 +224,7 @@ class TrajoptPlanner(BasePlanner):
         """
         import json
         import trajoptpy
+        from prpy import util
 
         # Set up environment.
         env = robot.GetEnv()
@@ -284,8 +285,13 @@ class TrajoptPlanner(BasePlanner):
                 prob.SetRobotActiveDOFs()
 
                 # Check that trajectory is collision free
-                self._checkCollisionForIKSolutions(robot, waypoints)
-
+                traj = self._WaypointsToTraj(robot, waypoints)
+                # Generate timed trajectory, required for GetCollisionCheckPTs
+                traj = util.ComputeUnitTiming(robot, traj)
+                checkpoints = util.GetCollisionCheckPts(robot, traj,
+                        include_start=True)
+                for t_check, q_check in checkpoints:
+                    self._checkCollisionForIKSolutions(robot, [q_check])
 
             # Convert the waypoints to a trajectory.
             path = self._WaypointsToTraj(robot, waypoints)
@@ -477,6 +483,7 @@ class TrajoptPlanner(BasePlanner):
         import json
         import time
         import trajoptpy
+        import prpy.util
 
         manipulator = robot.GetActiveManipulator()
         n_steps = 20
@@ -566,7 +573,13 @@ class TrajoptPlanner(BasePlanner):
             # Set robot DOFs to DOFs in optimization problem
             prob.SetRobotActiveDOFs()
             # Check that trajectory is collision free
-            self._checkCollisionForIKSolutions(robot, waypoints)
+            traj = self._WaypointsToTraj(robot, waypoints)
+            # Generate timed trajectory, required for GetCollisionCheckPTs
+            traj = util.ComputeUnitTiming(robot, traj) 
+            checkpoints = util.GetCollisionCheckPts(robot, traj,
+                        include_start=True)
+            for t_check, q_check in checkpoints:
+                self._checkCollisionForIKSolutions(robot, [q_check])
 
         # Convert the waypoints to a trajectory.
         return self._WaypointsToTraj(robot, waypoints)
@@ -664,7 +677,7 @@ class TrajoptPlanner(BasePlanner):
 
     def _checkCollisionForIKSolutions(self, robot, ik_solutions): 
         """ Raise collision error if there is one in ik_solutions
-        Should be called while saving robot's curent state 
+        Should be called while saving robot's current state 
         """
         from openravepy import CollisionReport
         manipulator = robot.GetActiveManipulator()    
