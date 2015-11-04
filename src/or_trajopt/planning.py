@@ -16,7 +16,9 @@ from prpy.planning.base import (BasePlanner,
                                 Tags)
 from prpy.planning.exceptions import (CollisionPlanningError,
                                       SelfCollisionPlanningError,
-                                      ConstraintViolationPlanningError)
+                                      ConstraintViolationPlanningError,
+                                      JointLimitError
+                                      )
 
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
@@ -280,25 +282,24 @@ class TrajoptPlanner(BasePlanner):
 
             # Set active DOFs to match active manipulator and plan.
             p = openravepy.KinBody.SaveParameters
+            traj = self._WaypointsToTraj(robot, waypoints)
+            # Generate timed trajectory, required for GetCollisionCheckPTs
+            traj = util.ComputeUnitTiming(robot, traj)
+            
+            # Check that trajectory is collision free
             with robot.CreateRobotStateSaver(p.ActiveDOF):
                 # Set robot DOFs to DOFs in optimization problem
                 prob.SetRobotActiveDOFs()
-
-                # Check that trajectory is collision free
-                traj = self._WaypointsToTraj(robot, waypoints)
-                # Generate timed trajectory, required for GetCollisionCheckPTs
-                traj = util.ComputeUnitTiming(robot, traj)
                 checkpoints = util.GetCollisionCheckPts(robot, traj,
                         include_start=True)
                 for t_check, q_check in checkpoints:
                     self._checkCollisionForIKSolutions(robot, [q_check])
 
             # Convert the waypoints to a trajectory.
-            path = self._WaypointsToTraj(robot, waypoints)
-            prpy.util.SetTrajectoryTags(path, {
+            prpy.util.SetTrajectoryTags(traj, {
                     Tags.SMOOTH: True
                 }, append=True)
-            return path
+            return traj
         finally:
             for body in env.GetBodies():
                 for key in TRAJOPT_USERDATA_KEYS:
@@ -560,7 +561,10 @@ class TrajoptPlanner(BasePlanner):
 
         # Check for constraint violations.
         if result.GetConstraints():
-            raise ConstraintViolationPlanningError(str(result.GetConstraints()[0]))
+            # Pick the first violate constraint
+            name = result.GetConstraints()[0][0]
+            error = result.GetConstraints()[0][1]
+            raise ConstraintViolationPlanningError(name, vioaltion_by = error)
 
         # Check for the returned trajectory.
         waypoints = result.GetTraj()
@@ -569,13 +573,14 @@ class TrajoptPlanner(BasePlanner):
 
         # Set active DOFs to match active manipulator and plan.
         p = openravepy.KinBody.SaveParameters
+        traj = self._WaypointsToTraj(robot, waypoints)
+        # Generate timed trajectory, required for GetCollisionCheckPTs
+        traj = util.ComputeUnitTiming(robot, traj) 
+
+        # Check that trajectory is collision free
         with robot.CreateRobotStateSaver(p.ActiveDOF):
             # Set robot DOFs to DOFs in optimization problem
             prob.SetRobotActiveDOFs()
-            # Check that trajectory is collision free
-            traj = self._WaypointsToTraj(robot, waypoints)
-            # Generate timed trajectory, required for GetCollisionCheckPTs
-            traj = util.ComputeUnitTiming(robot, traj) 
             checkpoints = util.GetCollisionCheckPts(robot, traj,
                         include_start=True)
             for t_check, q_check in checkpoints:
@@ -650,8 +655,7 @@ class TrajoptPlanner(BasePlanner):
 
     def _raiseCollisionErrorForPose(self, robot, pose):
         """ Identify collision for pose and raise error.
-        This will raise error even if no specific collision is found, 
-        so it should be called only when there is no IK solution. 
+        It should be called only when there is no IK solution and collision is expected. 
         """
         from openravepy import (IkFilterOptions,
                                 IkParameterization,
@@ -662,30 +666,40 @@ class TrajoptPlanner(BasePlanner):
         ik_param = IkParameterization(
             pose, IkParameterizationType.Transform6D)
 
-        ik_solutions = manipulator.FindIKSolutions(
+        ik_returns = manipulator.FindIKSolutions(
             ik_param,
             openravepy.IkFilterOptions.IgnoreSelfCollisions,
-            ikreturn=False,
-            releasegil=True
-            )
+            ikreturn=True,
+            releasegil=True)
 
-        p = openravepy.KinBody.SaveParameters
-        with robot.CreateRobotStateSaver(p.ActiveDOF):
-            self._checkCollisionForIKSolutions(robot, ik_solutions)
-
-        raise PlanningError('No collision-free IK solution.')
+        if len(ik_returns) == 0: 
+            # This is a hack. Sometimse findIKSolutions fails to find a solution
+            # and claims that it's due to JointLimit, but IgnoreJointLimit cant't find 
+            # solution either. 
+            ik_return  = manipulator.FindIKSolution(
+                ik_param, 
+                openravepy.IkFilterOptions.CheckEnvCollisions,
+                ikreturn = True, 
+                releasegil = True)
+            raise PlanningError(str(ik_return.GetAction())) #this most likely is JointLimit
+        
+        self._checkCollisionForIKSolutions(robot, map(lambda x: x.GetSolution(), ik_returns))
+        raise Exception('Collision/JointLimit error expected but not found.')
 
     def _checkCollisionForIKSolutions(self, robot, ik_solutions): 
-        """ Raise collision error if there is one in ik_solutions
+        """ Raise collision/joint limit  error if there is one in ik_solutions
         Should be called while saving robot's current state 
         """
         from openravepy import CollisionReport
-        manipulator = robot.GetActiveManipulator()    
-        for q in ik_solutions: 
-            robot.SetActiveDOFValues(q)
-            report = CollisionReport() 
-            env = robot.GetEnv()
-            if env.CheckCollision(robot, report=report): 
-                raise CollisionPlanningError.FromReport(report)
-            elif robot.CheckSelfCollision(report=report):
-                raise SelfCollisionPlanningError.FromReport(report)               
+        manipulator = robot.GetActiveManipulator()  
+        p = openravepy.KinBody.SaveParameters
+
+        with robot.CreateRobotStateSaver(p.LinkTransformation):
+            for q in ik_solutions: 
+                robot.SetActiveDOFValues(q)
+                report = CollisionReport() 
+                env = robot.GetEnv()
+                if env.CheckCollision(robot, report=report): 
+                    raise CollisionPlanningError.FromReport(report)
+                elif robot.CheckSelfCollision(report=report):
+                    raise SelfCollisionPlanningError.FromReport(report)
