@@ -290,7 +290,7 @@ class TrajoptPlanner(BasePlanner):
                 # Set robot DOFs to DOFs in optimization problem
                 prob.SetRobotActiveDOFs()
                 checkpoints = util.GetCollisionCheckPts(robot, traj,
-                        include_start=True)
+                                                        include_start=True)
                 for t_check, q_check in checkpoints:
                     self._checkCollisionForIKSolutions(robot, [q_check])
 
@@ -639,7 +639,7 @@ class TrajoptPlanner(BasePlanner):
             "init_info": {
                 "type": "given_traj",
                 "data": waypoints
-            }
+            }in
         }
         return self._Plan(robot, request, **kwargs)
 
