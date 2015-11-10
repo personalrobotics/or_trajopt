@@ -563,7 +563,7 @@ class TrajoptPlanner(BasePlanner):
             # Pick the first violate constraint
             name = result.GetConstraints()[0][0]
             error = result.GetConstraints()[0][1]
-            raise ConstraintViolationPlanningError(name, vioaltion_by = error)
+            raise ConstraintViolationPlanningError(name, violation_by=error)
 
         # Check for the returned trajectory.
         waypoints = result.GetTraj()
@@ -675,7 +675,7 @@ class TrajoptPlanner(BasePlanner):
             # This is a hack. Sometimse findIKSolutions fails to find a solution
             # and claims that it's due to JointLimit, but IgnoreJointLimit cant't find 
             # solution either. 
-            ik_return  = manipulator.FindIKSolution(
+            ik_return = manipulator.FindIKSolution(
                 ik_param, 
                 openravepy.IkFilterOptions.CheckEnvCollisions,
                 ikreturn = True, 
