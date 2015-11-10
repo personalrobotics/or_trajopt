@@ -285,10 +285,10 @@ class TrajoptPlanner(BasePlanner):
             # Generate unit-timed trajectory, required for GetCollisionCheckPts.
             timed_traj = util.ComputeUnitTiming(robot, traj)
             
-            # Check that trajectory is collision free
+            # Check that trajectory is collision free.
             p = openravepy.KinBody.SaveParameters
             with robot.CreateRobotStateSaver(p.ActiveDOF):
-                # Set robot DOFs to DOFs in optimization problem
+                # Set robot DOFs to DOFs in optimization problem.
                 prob.SetRobotActiveDOFs()
                 checkpoints = util.GetCollisionCheckPts(robot, timed_traj,
                                                         include_start=True)
@@ -409,7 +409,7 @@ class TrajoptPlanner(BasePlanner):
         ik_solutions = manipulator.FindIKSolutions(
             ik_param, IkFilterOptions.CheckEnvCollisions)
         if not len(ik_solutions):
-            # identify collision and raiseError
+            # Identify collision and raise error.
             self._raiseCollisionErrorForPose(robot, pose)
            
 
@@ -507,7 +507,7 @@ class TrajoptPlanner(BasePlanner):
             if init_joint_config:
                 break
         if not init_joint_config:
-            #Use last pose for collision error
+            # Use last pose to report collision error.
             self._raiseCollisionErrorForPose(robot,  pose) 
 
         # Construct a planning request with these constraints.
@@ -561,7 +561,7 @@ class TrajoptPlanner(BasePlanner):
 
         # Check for constraint violations.
         if result.GetConstraints():
-            # Pick the first violate constraint
+            # Pick the first violated constraint.
             name = result.GetConstraints()[0][0]
             error = result.GetConstraints()[0][1]
             raise ConstraintViolationPlanningError(name, violation_by=error)
@@ -577,10 +577,10 @@ class TrajoptPlanner(BasePlanner):
         # Generate unit-timed trajectory, required for GetCollisionCheckPts.
         timed_traj = util.ComputeUnitTiming(robot, traj) 
 
-        # Check that trajectory is collision free
+        # Check that trajectory is collision free.
         p = openravepy.KinBody.SaveParameters
         with robot.CreateRobotStateSaver(p.ActiveDOF):
-            # Set robot DOFs to DOFs in optimization problem
+            # Set robot DOFs to DOFs in optimization problem.
             prob.SetRobotActiveDOFs()
             checkpoints = util.GetCollisionCheckPts(robot, timed_traj,
                                                     include_start=True)
