@@ -639,7 +639,7 @@ class TrajoptPlanner(BasePlanner):
             "init_info": {
                 "type": "given_traj",
                 "data": waypoints
-            }in
+            }
         }
         return self._Plan(robot, request, **kwargs)
 
