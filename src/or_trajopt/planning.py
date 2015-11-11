@@ -420,9 +420,14 @@ class TrajoptPlanner(BasePlanner):
         best_idx = numpy.argmin(scores)
         init_joint_config = ik_solutions[best_idx]
 
-        # Convert IK endpoint transformation to pose.
-        goal_position = pose[0:3, 3].tolist()
-        goal_rotation = openravepy.quatFromRotationMatrix(pose).tolist()
+        # Convert IK endpoint transformation to pose. OpenRAVE operates on
+        # GetEndEffectorTransform(), which is equivalent to:
+        #
+        #   GetEndEffector().GetTransform() * GetLocalToolTransform()
+        #
+        link_pose = numpy.dot(pose, numpy.linalg.inv(manipulator.GetLocalToolTransform()))
+        goal_position = link_pose[0:3, 3].tolist()
+        goal_rotation = openravepy.quatFromRotationMatrix(link_pose).tolist()
 
         # Settings for TrajOpt
         num_steps = 10
