@@ -138,7 +138,7 @@ class TrajoptPlanner(BasePlanner):
         return 'Trajopt'
 
     @staticmethod
-    def _addFunction(problem, timestep, i_dofs, n_dofs, fnargs):
+    def _addFunction(problem, timestep, i_dofs, n_dofs, fnargs, wide=False):
         """ Converts dict of function parameters into cost or constraint. """
         f = fnargs.get('f')
         assert f is not None
@@ -151,11 +151,20 @@ class TrajoptPlanner(BasePlanner):
         dofs = fnargs.get('dofs')
         inds = ([list(i_dofs).index(dof) for dof in dofs]
                 if dofs is not None else range(n_dofs))
+        
 
         # Trajopt problem function signatures:
         # - AddConstraint(f, [df], ijs, typestr, name)
         # - AddErrCost(f, [df], ijs, typestr, name)
-        if isinstance(fntype, ConstraintType):
+        if wide == True:
+           if isinstance(fntype, CostType) and dfdx is None:
+               problem.AddErrorCost(f, [(t, i) for i in inds for t in range(timestep)], fntype.value, fnname)
+           elif isinstance(fntype, ConstraintType) and dfdx is None: 
+               problem.AddConstraint(f, [(timestep, i) for i in inds for timestep in range(timestep)],
+                     fntype.value, fnname)
+           else:
+               ValueError('Trajectory wide constraints and those with dfdx are not supported')
+        elif isinstance(fntype, ConstraintType):
             if dfdx is not None:
                 problem.AddConstraint(f, dfdx, [(timestep, i) for i in inds],
                                       fntype.value, fnname)
@@ -176,6 +185,7 @@ class TrajoptPlanner(BasePlanner):
     def _Plan(self, robot, request,
               traj_constraints=(), goal_constraints=(),
               traj_costs=(), goal_costs=(),
+              traj_wide_constraints=(), traj_wide_costs=(),
               interactive=False, constraint_threshold=1e-4,
               **kwargs):
         """
@@ -239,12 +249,13 @@ class TrajoptPlanner(BasePlanner):
             # that stores optimization problem.
             s = json.dumps(request)
             prob = trajoptpy.ConstructProblem(s, env)
-
             assert(request['basic_info']['manip'] == 'active')
             assert(request['basic_info']['n_steps'] is not None)
             n_steps = request['basic_info']['n_steps']
             n_dofs = robot.GetActiveDOF()
             i_dofs = robot.GetActiveDOFIndices()
+            #print 'Active DOF', n_dofs
+            #print s
 
             # Add trajectory-wide costs and constraints to each timestep.
             for t in xrange(1, n_steps):
@@ -252,6 +263,13 @@ class TrajoptPlanner(BasePlanner):
                     self._addFunction(prob, t, i_dofs, n_dofs, constraint)
                 for cost in traj_costs:
                     self._addFunction(prob, t, i_dofs, n_dofs, cost)
+
+            # Add trajectory wide costs and constrains
+            for constraint in traj_wide_constraints:
+                self._addFunction(prob, n_steps, i_dofs, n_dofs, constraint, wide=True)
+
+            for cost in traj_wide_costs:
+                self._addFunction(prob, n_steps, i_dofs, n_dofs, cost, wide=True)
 
             # Add goal costs and constraints.
             for constraint in goal_constraints:
@@ -614,9 +632,12 @@ class TrajoptPlanner(BasePlanner):
         cspec = traj.GetConfigurationSpecification()
         n_waypoints = traj.GetNumWaypoints()
         dofs = robot.GetActiveDOFIndices()
+        goal = traj.GetWaypoint(traj.GetNumWaypoints()-1)[0:7]
+        print 'DOFS in Optimize', dofs
         waypoints = [cspec.ExtractJointValues(traj.GetWaypoint(i),
                                               robot, dofs).tolist()
                      for i in range(n_waypoints)]
+        print 'Waypoints', len(waypoints)
 
         request = {
             "basic_info": {
@@ -624,23 +645,29 @@ class TrajoptPlanner(BasePlanner):
                 "manip": "active",
                 "start_fixed": True
             },
-            "costs": [
-                {
-                    "type": "joint_vel",
-                    "params": {"coeffs": [1]}
-                },
-                {
-                    "type": "collision",
-                    "params": {
-                        "coeffs": [20],
-                        "dist_pen": [distance_penalty]
-                    },
-                }
-            ],
+            #"costs": [
+                #{
+                #    "type": "joint_vel",
+                #    "params": {"coeffs": [1]}
+                #},
+            #    {
+            #        "type": "collision",
+            #        "params": {
+            #            "coeffs": [75], #was 20
+            #            "dist_pen": [distance_penalty]
+            #        },
+            #    }
+            #],
+            #"constraints": [
+            #    {
+            #        "type": "joint",
+            #        "params": {"vals": waypoints[-1]}
+            #    }
+            #],
             "constraints": [
                 {
                     "type": "joint",
-                    "params": {"vals": waypoints[-1]}
+                    "params": {"vals": goal.tolist()}
                 }
             ],
             "init_info": {
