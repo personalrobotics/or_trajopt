@@ -6,9 +6,11 @@ import logging
 import numpy
 import time
 import openravepy
+from openravepy import (IkFilterOptions,
+                        IkParameterization,
+                        IkParameterizationType)
 import os
 import prpy.util
-from . import constraints
 from prpy.planning.base import (BasePlanner,
                                 MetaPlanner,
                                 PlanningError,
@@ -17,7 +19,7 @@ from prpy.planning.base import (BasePlanner,
 from prpy.planning.exceptions import (CollisionPlanningError,
                                       SelfCollisionPlanningError,
                                       ConstraintViolationPlanningError,
-                                      JointLimitError)
+                                      UnsupportedPlanningError)
 
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
@@ -403,9 +405,6 @@ class TrajoptPlanner(BasePlanner):
                 ranker = NominalConfiguration(manipulator.GetArmDOFValues())
 
         # Find initial collision-free IK solution.
-        from openravepy import (IkFilterOptions,
-                                IkParameterization,
-                                IkParameterizationType)
         ik_param = IkParameterization(
             pose, IkParameterizationType.Transform6D)
         ik_solutions = manipulator.FindIKSolutions(
@@ -518,9 +517,6 @@ class TrajoptPlanner(BasePlanner):
         final_goal[:3, 3] += max_distance * direction
 
         # Find initial collision-free IK solution.
-        from openravepy import (IkFilterOptions,
-                                IkParameterization,
-                                IkParameterizationType)
         ik_param = IkParameterization(
             initial_goal, IkParameterizationType.Transform6D)
         ik_solutions = manipulator.FindIKSolutions(
@@ -628,6 +624,143 @@ class TrajoptPlanner(BasePlanner):
                              'type': CostType.HINGE},),
                 **kwargs)
 
+    @PlanningMethod
+    def PlanToTSR(self, robot, tsrchains, num_samples=50, ranker=None, **kwargs):
+        """
+        Plan to a desired TSR set using a-priori goal sampling.  This planner
+        samples a fixed number of goals from the specified TSRs up-front, then
+        uses another planner's PlanToConfiguration (chunk_size = 1) or
+        PlanToConfigurations (chunk_size > 1) to plan to the resulting affine
+        transformations.
+
+        This planner will return failure if the provided TSR chains require
+        any constraint other than goal sampling.
+
+        @param robot the robot whose active manipulator will be used
+        @param tsrchains a list of TSR chains that define a goal set
+        @param num_samples number of TSR samples to find initial goal
+        @param ranker an IK ranking function to use over the IK solutions
+        @return traj a trajectory that satisfies the specified TSR chains
+        """
+        # Test for tsrchains that cannot be handled.
+        for tsrchain in tsrchains:
+            if tsrchain.sample_start or tsrchain.constrain:
+                raise UnsupportedPlanningError(
+                    'Cannot handle start or trajectory-wide TSR constraints.')
+        tsrchains = [t for t in tsrchains if t.sample_goal]
+
+        # Plan using the active manipulator.
+        with robot.GetEnv():
+            manipulator = robot.GetActiveManipulator()
+            indices = manipulator.GetArmIndices()
+
+            # Distance from current configuration is default ranking.
+            if ranker is None:
+                from prpy.ik_ranking import NominalConfiguration
+                ranker = NominalConfiguration(manipulator.GetArmDOFValues())
+
+        # Find initial collision-free IK solution by sampling each TSR chain.
+        # TODO: do this more fairly
+        ik_solutions_list = [numpy.zeros((0, len(indices)))]
+        for tsrchain in tsrchains:
+            for i in range(num_samples):
+                goal_sample = tsrchain.sample()
+
+                ik_param = IkParameterization(
+                    goal_sample, IkParameterizationType.Transform6D)
+                ik_solutions = manipulator.FindIKSolutions(
+                    ik_param, IkFilterOptions.CheckEnvCollisions)
+                if len(ik_solutions):
+                    ik_solutions_list.append(ik_solutions)
+
+        all_ik_solutions = numpy.vstack(ik_solutions_list)
+        if not len(all_ik_solutions):
+            # Identify collision and raise error.
+            self._raiseCollisionErrorForPose(robot, goal_sample)
+
+        # Sort the IK solutions in ascending order by the costs returned by the
+        # ranker. Lower cost solutions are better and infinite cost solutions
+        # are assumed to be infeasible.
+        scores = ranker(robot, all_ik_solutions)
+        best_idx = numpy.argmin(scores)
+        initial_config = all_ik_solutions[best_idx]
+        indices = manipulator.GetArmIndices()
+
+        # Settings for TrajOpt
+        num_steps = 10
+
+        # Construct a planning request with these constraints.
+        request = {
+            "basic_info": {
+                "n_steps": num_steps
+            },
+            "costs": [
+                {
+                    "type": "joint_vel",
+                    "params": {"coeffs": [1]}
+                },
+                {
+                    "type": "collision",
+                    "params": {
+                        "coeffs": [20],
+                        "dist_pen": [0.025]
+                    },
+                }
+            ],
+            "constraints": [
+            ],
+            "init_info": {
+                "type": "straight_line",
+                "endpoint": initial_config.tolist()
+            }
+        }
+
+        # Create a cost function that is minimized when the goal lies
+        # within the TSR region.
+        def g(x):
+            robot.SetDOFValues(x, indices, False)
+            T_ee = manipulator.GetEndEffectorTransform()
+
+            distances = [tsrchain.distance(T_ee)[0]
+                         for tsrchain in tsrchains]
+            return min(distances) - 0.1
+
+        def dgdx(x):
+            robot.SetDOFValues(x, indices, False)
+            T_ee = manipulator.GetEndEffectorTransform()
+
+            # Get the projection into each TSR chain.
+            deviations = [tsrchain.distance(T_ee)
+                          for tsrchain in tsrchains]
+            deviations = sorted(deviations, key=lambda tup: tup[0])
+
+            # Find the closest valid IK solution.
+            closest_config = None
+            for tsrchain, (distance, bwlist) in zip(tsrchains, deviations):
+                closest_T = tsrchain.to_transform(bwlist)
+
+                ik_param = IkParameterization(
+                    closest_T, IkParameterizationType.Transform6D)
+                closest_config = manipulator.FindIKSolution(
+                    ik_param, IkFilterOptions.CheckEnvCollisions)
+                if closest_config is not None:
+                    return numpy.atleast_2d(x - closest_config)
+
+            # If no IK valid solutions exist to project, throw an error.
+            if closest_config is None:
+                self._raiseCollisionErrorForPose(robot, goal_sample)
+
+        # Set active DOFs to match active manipulator and plan.
+        p = openravepy.KinBody.SaveParameters
+        with robot.CreateRobotStateSaver(p.ActiveDOF):
+            robot.SetActiveDOFs(manipulator.GetArmIndices())
+            return self._Plan(
+                robot, request,
+                goal_constraints=({'f': g,
+                                   'dfdx': dgdx,
+                                   'type': ConstraintType.INEQ},),
+                **kwargs)
+
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.050, **kwargs):
         """
@@ -694,10 +827,6 @@ class TrajoptPlanner(BasePlanner):
         """ Identify collision for pose and raise error.
         It should be called only when there is no IK solution and collision is expected. 
         """
-        from openravepy import (IkFilterOptions,
-                                IkParameterization,
-                                IkParameterizationType)
-
         manipulator = robot.GetActiveManipulator()
 
         ik_param = IkParameterization(
