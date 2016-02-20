@@ -478,7 +478,9 @@ class TrajoptPlanner(BasePlanner):
 
     @PlanningMethod
     def PlanToEndEffectorOffset(self, robot, direction, distance,
-                                max_distance=None, ranker=None,
+                                max_distance=None,
+                                position_tolerance=0.02,
+                                ranker=None,
                                 **kwargs):
         """
         Plan to a desired end-effector offset with move-hand-straight
@@ -488,11 +490,15 @@ class TrajoptPlanner(BasePlanner):
         @param robot
         @param direction unit vector in the direction of motion
         @param distance minimum distance in meters
+        @param position_tolerance allowable deviation from straight-line path
         @param ranker an IK ranking function to use over the IK solutions
         @param max_distance maximum distance in meters
         @return traj
         """
-        direction = numpy.array(direction)
+        # Normalize and numpy-ize the direction vector.
+        direction = numpy.array(direction) / numpy.linalg.norm(direction)
+        if max_distance is None:
+            max_distance = distance
 
         # Plan using the active manipulator.
         with robot.GetEnv():
@@ -529,7 +535,6 @@ class TrajoptPlanner(BasePlanner):
         scores = ranker(robot, ik_solutions)
         best_idx = numpy.argmin(scores)
         init_joint_config = ik_solutions[best_idx]
-        joints = [robot.GetJoints()[idx] for idx in manipulator.GetArmJoints()]
         indices = manipulator.GetArmIndices()
 
         # We will enforce the constraint that every intermediate position has
@@ -537,7 +542,7 @@ class TrajoptPlanner(BasePlanner):
         q_goal = openravepy.quatFromRotationMatrix(initial_goal).tolist()
 
         # Settings for TrajOpt
-        num_steps = 10
+        num_steps = 20
 
         # Construct a planning request with these constraints.
         request = {
@@ -553,7 +558,7 @@ class TrajoptPlanner(BasePlanner):
                     "type": "collision",
                     "params": {
                         "coeffs": [20],
-                        "dist_pen": [0.01]  # Get _really_ close.
+                        "dist_pen": [0.0]  # Get _really_ close.
                     },
                 }
             ],
@@ -574,21 +579,18 @@ class TrajoptPlanner(BasePlanner):
             }
         }
 
-        # Create a constraint function that is minimized when the tool is
-        # moving exactly along the direction vector from the start.
+        # Create a cost function that is minimized when the tool moves
+        # exactly along the direction vector from the starting config
+        # enforced by a hinge-loss that includes an allowable tolerance.
+        projection_origin = final_goal[:3, 3]
+
         def f(x):
             robot.SetDOFValues(x, indices, False)
             tool_position = manipulator.GetEndEffectorTransform()[:3, 3]
-            proj_position = numpy.dot(tool_position, direction) * direction
-            return numpy.linalg.norm(tool_position - proj_position)
-
-        def dfdx(x):
-            robot.SetDOFValues(x, indices, False)
-            tool_position = manipulator.GetEndEffectorTransform()[:3, 3]
-            proj_position = numpy.dot(tool_position, direction) * direction
-            diff_position = proj_position - tool_position
-            return numpy.array([numpy.cross(joint.GetAxis(), diff_position)[:2]
-                                for joint in joints]).T.copy()
+            diff_position = tool_position - projection_origin
+            err = numpy.linalg.norm(numpy.cross(diff_position, direction))
+            err -= position_tolerance
+            return err
 
         # Create an objective function along the offset direction that is
         # _minimized_ as the goal passes `max_distance`.
@@ -610,9 +612,8 @@ class TrajoptPlanner(BasePlanner):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
             return self._Plan(
                 robot, request,
-                # traj_constraints=({'f': f,
-                #                   'dfdx': dfdx,
-                #                   'type': ConstraintType.EQ},),
+                traj_costs=({'f': f,
+                             'type': CostType.HINGE},),
                 goal_costs=({'f': g,
                              'dfdx': dgdx,
                              'type': CostType.HINGE},),
