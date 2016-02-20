@@ -571,6 +571,15 @@ class TrajoptPlanner(BasePlanner):
                         "link": manipulator.GetEndEffector().GetName(),
                         "pos_coeffs": [0, 0, 0],  # ignore position
                     }
+                },
+                {
+                    "type": "pose",
+                    "params": {
+                        "xyz": initial_goal[:3, 3].tolist(),
+                        "wxyz": q_goal,
+                        "link": manipulator.GetEndEffector().GetName(),
+                        "timestep": num_steps / 2
+                    }
                 }
             ],
             "init_info": {
