@@ -235,18 +235,20 @@ class TrajoptPlanner(BasePlanner):
         # is cloned into multiple times, so create a scope to later
         # remove all TrajOpt UserData keys.
         try:
-            # Convert dictionary into json-formatted string and create object
-            # that stores optimization problem.
-            s = json.dumps(request)
-            prob = trajoptpy.ConstructProblem(s, env)
-
+            # Validate request and fill in request fields that must use
+            # specific values to work.
             assert(request['basic_info']['n_steps'] is not None)
-            request['basic_info']['manip'] == 'active'
+            request['basic_info']['manip'] = 'active'
             request['basic_info']['robot'] = robot.GetName()
             request['basic_info']['start_fixed'] = True
             n_steps = request['basic_info']['n_steps']
             n_dofs = robot.GetActiveDOF()
             i_dofs = robot.GetActiveDOFIndices()
+
+            # Convert dictionary into json-formatted string and create object
+            # that stores optimization problem.
+            s = json.dumps(request)
+            prob = trajoptpy.ConstructProblem(s, env)
 
             # Add trajectory-wide costs and constraints to each timestep.
             for t in xrange(1, n_steps):
@@ -503,8 +505,10 @@ class TrajoptPlanner(BasePlanner):
 
         # The goal poses are the translation of the current pose in the
         # desired direction by `distance` and `max_distance`
-        initial_goal = final_goal = manipulator.GetEndEffectorTransform()
+        initial_goal = manipulator.GetEndEffectorTransform()
         initial_goal[:3, 3] += distance * direction
+
+        final_goal = manipulator.GetEndEffectorTransform()
         final_goal[:3, 3] += max_distance * direction
 
         # Find initial collision-free IK solution.
@@ -525,7 +529,8 @@ class TrajoptPlanner(BasePlanner):
         scores = ranker(robot, ik_solutions)
         best_idx = numpy.argmin(scores)
         init_joint_config = ik_solutions[best_idx]
-        # joints = manipulator.GetJoints()
+        joints = [robot.GetJoints()[idx] for idx in manipulator.GetArmJoints()]
+        indices = manipulator.GetArmIndices()
 
         # We will enforce the constraint that every intermediate position has
         # the same orientation.
@@ -548,7 +553,7 @@ class TrajoptPlanner(BasePlanner):
                     "type": "collision",
                     "params": {
                         "coeffs": [20],
-                        "dist_pen": [0.025]
+                        "dist_pen": [0.01]  # Get _really_ close.
                     },
                 }
             ],
@@ -569,31 +574,49 @@ class TrajoptPlanner(BasePlanner):
             }
         }
 
+        # Create a constraint function that is minimized when the tool is
+        # moving exactly along the direction vector from the start.
+        def f(x):
+            robot.SetDOFValues(x, indices, False)
+            tool_position = manipulator.GetEndEffectorTransform()[:3, 3]
+            proj_position = numpy.dot(tool_position, direction) * direction
+            return numpy.linalg.norm(tool_position - proj_position)
+
+        def dfdx(x):
+            robot.SetDOFValues(x, indices, False)
+            tool_position = manipulator.GetEndEffectorTransform()[:3, 3]
+            proj_position = numpy.dot(tool_position, direction) * direction
+            diff_position = proj_position - tool_position
+            return numpy.array([numpy.cross(joint.GetAxis(), diff_position)[:2]
+                                for joint in joints]).T.copy()
+
         # Create an objective function along the offset direction that is
         # _minimized_ as the goal passes `max_distance`.
         projection_goal = numpy.dot(final_goal[:3, 3], direction)
 
-        def f(x):
-            manipulator.SetDOFValues(x, False)
+        def g(x):
+            robot.SetDOFValues(x, indices, False)
             return projection_goal - numpy.dot(
                 manipulator.GetEndEffectorTransform()[:3, 3], direction)
 
-        """
-        def dfdx(x):
-            manipulator.SetDOFValues(x, False)
-            return numpy.array([numpy.cross(joint.GetAxis(), direction)[:2]
-                                for joint in joints]).T.copy()
-        """
+        def dgdx(x):
+            robot.SetDOFValues(x, indices, False)
+            J = manipulator.CalculateJacobian()
+            return numpy.atleast_2d(numpy.dot(-direction, J))
 
         # Set active DOFs to match active manipulator and plan.
         p = openravepy.KinBody.SaveParameters
         with robot.CreateRobotStateSaver(p.ActiveDOF):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
-            return self._Plan(robot, request, goal_costs=({
-                    'f': f,
-                    # 'dfdx': dfdx,
-                    'type': CostType.HINGE
-                }), **kwargs)
+            return self._Plan(
+                robot, request,
+                # traj_constraints=({'f': f,
+                #                   'dfdx': dfdx,
+                #                   'type': ConstraintType.EQ},),
+                goal_costs=({'f': g,
+                             'dfdx': dgdx,
+                             'type': CostType.HINGE},),
+                **kwargs)
 
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.050, **kwargs):
