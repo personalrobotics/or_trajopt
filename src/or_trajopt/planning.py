@@ -240,8 +240,10 @@ class TrajoptPlanner(BasePlanner):
             s = json.dumps(request)
             prob = trajoptpy.ConstructProblem(s, env)
 
-            assert(request['basic_info']['manip'] == 'active')
             assert(request['basic_info']['n_steps'] is not None)
+            request['basic_info']['manip'] == 'active'
+            request['basic_info']['robot'] = robot.GetName()
+            request['basic_info']['start_fixed'] = True
             n_steps = request['basic_info']['n_steps']
             n_dofs = robot.GetActiveDOF()
             i_dofs = robot.GetActiveDOFIndices()
@@ -271,8 +273,8 @@ class TrajoptPlanner(BasePlanner):
                 if error > constraint_threshold:
                     raise ConstraintViolationPlanningError(
                         name,
-                        threshold = constraint_threshold,
-                        violation_by = error)
+                        threshold=constraint_threshold,
+                        violation_by=error)
 
             # Check for the returned trajectory.
             waypoints = result.GetTraj()
@@ -281,10 +283,10 @@ class TrajoptPlanner(BasePlanner):
 
             # Convert the trajectory to OpenRAVE format.
             traj = self._WaypointsToTraj(robot, waypoints)
-            
-            # Generate unit-timed trajectory, required for GetCollisionCheckPts.
+
+            # Generate unit-timed trajectory required for GetCollisionCheckPts.
             timed_traj = util.ComputeUnitTiming(robot, traj)
-            
+
             # Check that trajectory is collision free.
             p = openravepy.KinBody.SaveParameters
             with robot.CreateRobotStateSaver(p.ActiveDOF):
@@ -326,9 +328,7 @@ class TrajoptPlanner(BasePlanner):
 
         request = {
             "basic_info": {
-                "n_steps": num_steps,
-                "manip": "active",
-                "start_fixed": True
+                "n_steps": num_steps
             },
             "costs": [
                 {
@@ -411,7 +411,6 @@ class TrajoptPlanner(BasePlanner):
         if not len(ik_solutions):
             # Identify collision and raise error.
             self._raiseCollisionErrorForPose(robot, pose)
-           
 
         # Sort the IK solutions in ascending order by the costs returned by the
         # ranker. Lower cost solutions are better and infinite cost solutions
@@ -425,7 +424,9 @@ class TrajoptPlanner(BasePlanner):
         #
         #   GetEndEffector().GetTransform() * GetLocalToolTransform()
         #
-        link_pose = numpy.dot(pose, numpy.linalg.inv(manipulator.GetLocalToolTransform()))
+        link_pose = numpy.dot(
+            pose, numpy.linalg.inv(
+                manipulator.GetLocalToolTransform()))
         goal_position = link_pose[0:3, 3].tolist()
         goal_rotation = openravepy.quatFromRotationMatrix(link_pose).tolist()
 
@@ -435,9 +436,7 @@ class TrajoptPlanner(BasePlanner):
         # Construct a planning request with these constraints.
         request = {
             "basic_info": {
-                "n_steps": num_steps,
-                "manip": "active",
-                "start_fixed": True
+                "n_steps": num_steps
             },
             "costs": [
                 {
@@ -475,52 +474,70 @@ class TrajoptPlanner(BasePlanner):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
             return self._Plan(robot, request, **kwargs)
 
-    # @PlanningMethod
-    def PlanToTSR(self, robot, tsrchains, is_interactive=False, **kw_args):
+    @PlanningMethod
+    def PlanToEndEffectorOffset(self, robot, direction, distance,
+                                max_distance=None, ranker=None,
+                                **kwargs):
         """
-        Plan using the given list of TSR chains with TrajOpt.
+        Plan to a desired end-effector offset with move-hand-straight
+        constraint. movement less than distance will return failure. The motion
+        will not move further than max_distance.
 
-        @param robot the robot whose active manipulator will be used
-        @param tsrchains a list of TSRChain objects to respect during planning
-        @param is_interactive pause every iteration, until you press 'p'
-                              or press escape to disable further plotting
+        @param robot
+        @param direction unit vector in the direction of motion
+        @param distance minimum distance in meters
+        @param ranker an IK ranking function to use over the IK solutions
+        @param max_distance maximum distance in meters
         @return traj
         """
-        import json
-        import time
-        import trajoptpy
-        import prpy.util
+        direction = numpy.array(direction)
 
-        manipulator = robot.GetActiveManipulator()
-        n_steps = 20
-        n_dofs = robot.GetActiveDOF()
+        # Plan using the active manipulator.
+        with robot.GetEnv():
+            manipulator = robot.GetActiveManipulator()
 
-        # Create separate lists for the goal and trajectory-wide constraints.
-        goal_tsrs = [t for t in tsrchains if t.sample_goal]
-        traj_tsrs = [t for t in tsrchains if t.constrain]
+            # Distance from current configuration is default ranking.
+            if ranker is None:
+                from prpy.ik_ranking import NominalConfiguration
+                ranker = NominalConfiguration(manipulator.GetArmDOFValues())
 
-        # Find an initial collision-free IK solution by sampling goal TSRs.
+        # The goal poses are the translation of the current pose in the
+        # desired direction by `distance` and `max_distance`
+        initial_goal = final_goal = manipulator.GetEndEffectorTransform()
+        initial_goal[:3, 3] += distance * direction
+        final_goal[:3, 3] += max_distance * direction
+
+        # Find initial collision-free IK solution.
         from openravepy import (IkFilterOptions,
                                 IkParameterization,
                                 IkParameterizationType)
-        for tsr in self._TsrSampler(goal_tsrs):
-            pose = tsr.sample()
-            ik_param = IkParameterization(
-                pose, IkParameterizationType.Transform6D)
-            init_joint_config = manipulator.FindIKSolutions(
-                ik_param, IkFilterOptions.CheckEnvCollisions)
-            if init_joint_config:
-                break
-        if not init_joint_config:
-            # Use last pose to report collision error.
-            self._raiseCollisionErrorForPose(robot,  pose) 
+        ik_param = IkParameterization(
+            initial_goal, IkParameterizationType.Transform6D)
+        ik_solutions = manipulator.FindIKSolutions(
+            ik_param, IkFilterOptions.CheckEnvCollisions)
+        if not len(ik_solutions):
+            # Identify collision and raise error.
+            self._raiseCollisionErrorForPose(robot, initial_goal)
+
+        # Sort the IK solutions in ascending order by the costs returned by the
+        # ranker. Lower cost solutions are better and infinite cost solutions
+        # are assumed to be infeasible.
+        scores = ranker(robot, ik_solutions)
+        best_idx = numpy.argmin(scores)
+        init_joint_config = ik_solutions[best_idx]
+        # joints = manipulator.GetJoints()
+
+        # We will enforce the constraint that every intermediate position has
+        # the same orientation.
+        q_goal = openravepy.quatFromRotationMatrix(initial_goal).tolist()
+
+        # Settings for TrajOpt
+        num_steps = 10
 
         # Construct a planning request with these constraints.
         request = {
             "basic_info": {
-                "n_steps": n_steps,
-                "manip": "active",
-                "start_fixed": True
+                "n_steps": num_steps
             },
             "costs": [
                 {
@@ -535,65 +552,48 @@ class TrajoptPlanner(BasePlanner):
                     },
                 }
             ],
-            "constraints": [],
+            "constraints": [
+                {
+                    "type": "pose",
+                    "params": {
+                        "xyz": [0, 0, 0],  # unused
+                        "wxyz": q_goal,
+                        "link": manipulator.GetEndEffector().GetName(),
+                        "pos_coeffs": [0, 0, 0],  # ignore position
+                    }
+                }
+            ],
             "init_info": {
                 "type": "straight_line",
                 "endpoint": init_joint_config.tolist()
             }
         }
 
-        # Set up environment.
-        env = robot.GetEnv()
-        trajoptpy.SetInteractive(is_interactive)
+        # Create an objective function along the offset direction that is
+        # _minimized_ as the goal passes `max_distance`.
+        projection_goal = numpy.dot(final_goal[:3, 3], direction)
 
-        # Convert dictionary into json-formatted string and create object that
-        # stores optimization problem.
-        s = json.dumps(request)
-        prob = trajoptpy.ConstructProblem(s, env)
-        for t in xrange(1, n_steps):
-            prob.AddConstraint(constraints._TsrCostFn(robot, traj_tsrs),
-                               [(t, j) for j in xrange(n_dofs)],
-                               "EQ", "up{:d}".format(t))
-        prob.AddConstraint(constraints._TsrCostFn(robot, goal_tsrs),
-                           [(n_steps-1, j) for j in xrange(n_dofs)],
-                           "EQ", "up{:d}".format(t))
+        def f(x):
+            manipulator.SetDOFValues(x, False)
+            return projection_goal - numpy.dot(
+                manipulator.GetEndEffectorTransform()[:3, 3], direction)
 
-        # Perform trajectory optimization.
-        t_start = time.time()
-        result = trajoptpy.OptimizeProblem(prob)
-        t_elapsed = time.time() - t_start
-        logger.info("Optimization took {:.3f} seconds".format(t_elapsed))
+        """
+        def dfdx(x):
+            manipulator.SetDOFValues(x, False)
+            return numpy.array([numpy.cross(joint.GetAxis(), direction)[:2]
+                                for joint in joints]).T.copy()
+        """
 
-        # Check for constraint violations.
-        if result.GetConstraints():
-            # Pick the first violated constraint.
-            name = result.GetConstraints()[0][0]
-            error = result.GetConstraints()[0][1]
-            raise ConstraintViolationPlanningError(name, violation_by=error)
-
-        # Check for the returned trajectory.
-        waypoints = result.GetTraj()
-        if waypoints is None:
-            raise PlanningError("Trajectory result was empty.")
-
-        # Convert the trajectory to OpenRAVE format.
-        traj = self._WaypointsToTraj(robot, waypoints)
-
-        # Generate unit-timed trajectory, required for GetCollisionCheckPts.
-        timed_traj = util.ComputeUnitTiming(robot, traj) 
-
-        # Check that trajectory is collision free.
+        # Set active DOFs to match active manipulator and plan.
         p = openravepy.KinBody.SaveParameters
         with robot.CreateRobotStateSaver(p.ActiveDOF):
-            # Set robot DOFs to DOFs in optimization problem.
-            prob.SetRobotActiveDOFs()
-            checkpoints = util.GetCollisionCheckPts(robot, timed_traj,
-                                                    include_start=True)
-            for _, q_check in checkpoints:
-                self._checkCollisionForIKSolutions(robot, [q_check])
-
-        # Return the generated trajectory.
-        return traj
+            robot.SetActiveDOFs(manipulator.GetArmIndices())
+            return self._Plan(robot, request, goal_costs=({
+                    'f': f,
+                    # 'dfdx': dfdx,
+                    'type': CostType.HINGE
+                }), **kwargs)
 
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.050, **kwargs):
@@ -620,9 +620,7 @@ class TrajoptPlanner(BasePlanner):
 
         request = {
             "basic_info": {
-                "n_steps": n_waypoints,
-                "manip": "active",
-                "start_fixed": True
+                "n_steps": n_waypoints
             },
             "costs": [
                 {
