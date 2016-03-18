@@ -475,7 +475,6 @@ class TrajoptPlanner(BasePlanner):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
             return self._Plan(robot, request, **kwargs)
 
-    @PlanningMethod
     def PlanToEndEffectorOffset(self, robot, direction, distance,
                                 max_distance=None,
                                 position_tolerance=0.02,
@@ -624,7 +623,6 @@ class TrajoptPlanner(BasePlanner):
                              'type': CostType.HINGE},),
                 **kwargs)
 
-    @PlanningMethod
     def PlanToTSR(self, robot, tsrchains, num_samples=50, ranker=None, **kwargs):
         """
         Plan to a desired TSR set using a-priori goal sampling.  This planner
