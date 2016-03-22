@@ -326,6 +326,7 @@ class TrajoptPlanner(BasePlanner):
 
         request = {
             "basic_info": {
+                "robot": str(robot.GetName()),
                 "n_steps": num_steps,
                 "manip": "active",
                 "start_fixed": True
@@ -435,6 +436,7 @@ class TrajoptPlanner(BasePlanner):
         # Construct a planning request with these constraints.
         request = {
             "basic_info": {
+                "robot": str(robot.GetName()),
                 "n_steps": num_steps,
                 "manip": "active",
                 "start_fixed": True
@@ -518,6 +520,7 @@ class TrajoptPlanner(BasePlanner):
         # Construct a planning request with these constraints.
         request = {
             "basic_info": {
+                "robot": str(robot.GetName()),
                 "n_steps": n_steps,
                 "manip": "active",
                 "start_fixed": True
@@ -620,6 +623,7 @@ class TrajoptPlanner(BasePlanner):
 
         request = {
             "basic_info": {
+                "robot": str(robot.GetName()),
                 "n_steps": n_waypoints,
                 "manip": "active",
                 "start_fixed": True
