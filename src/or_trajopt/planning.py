@@ -6,9 +6,12 @@ import logging
 import numpy
 import time
 import openravepy
+from openravepy import (IkFilterOptions,
+                        IkParameterization,
+                        IkParameterizationType)
 import os
 import prpy.util
-from . import constraints
+from prpy.planning.retimer import HauserParabolicSmoother
 from prpy.planning.base import (BasePlanner,
                                 MetaPlanner,
                                 PlanningError,
@@ -16,8 +19,7 @@ from prpy.planning.base import (BasePlanner,
                                 Tags)
 from prpy.planning.exceptions import (CollisionPlanningError,
                                       SelfCollisionPlanningError,
-                                      ConstraintViolationPlanningError,
-                                      JointLimitError)
+                                      ConstraintViolationPlanningError)
 
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
@@ -68,6 +70,7 @@ class TrajoptWrapper(MetaPlanner):
         #       self._planners must exist.
         self._planners = (planner,)
         self._trajopt = TrajoptPlanner()
+        self._simplifier = HauserParabolicSmoother(timelimit=0.25)
 
     def __str__(self):
         return 'TrajoptWrapper({0:s})'.format(self._planners[0])
@@ -92,16 +95,7 @@ class TrajoptWrapper(MetaPlanner):
         traj = SimplifyTrajectory(traj, robot)
 
         # Run path shortcutting on the RRT path.
-        import openravepy
-        params = openravepy.Planner.PlannerParameters()
-        params.SetExtraParameters('<time_limit>0.25</time_limit>')
-        simplifier = openravepy.RaveCreatePlanner(robot.GetEnv(),
-                                                  'OMPL_Simplifier')
-        simplifier.InitPlan(robot, params)
-
-        with robot:
-            result = simplifier.PlanPath(traj)
-            assert result == openravepy.PlannerStatus.HasSolution
+        traj = self._simplifier.RetimeTrajectory(robot, traj)
 
         # Call Trajopt to optimize the seed trajectory.
         # Try different distance penalties until out of collision.
@@ -235,16 +229,20 @@ class TrajoptPlanner(BasePlanner):
         # is cloned into multiple times, so create a scope to later
         # remove all TrajOpt UserData keys.
         try:
+            # Validate request and fill in request fields that must use
+            # specific values to work.
+            assert(request['basic_info']['n_steps'] is not None)
+            request['basic_info']['manip'] = 'active'
+            request['basic_info']['robot'] = robot.GetName()
+            request['basic_info']['start_fixed'] = True
+            n_steps = request['basic_info']['n_steps']
+            n_dofs = robot.GetActiveDOF()
+            i_dofs = robot.GetActiveDOFIndices()
+
             # Convert dictionary into json-formatted string and create object
             # that stores optimization problem.
             s = json.dumps(request)
             prob = trajoptpy.ConstructProblem(s, env)
-
-            assert(request['basic_info']['manip'] == 'active')
-            assert(request['basic_info']['n_steps'] is not None)
-            n_steps = request['basic_info']['n_steps']
-            n_dofs = robot.GetActiveDOF()
-            i_dofs = robot.GetActiveDOFIndices()
 
             # Add trajectory-wide costs and constraints to each timestep.
             for t in xrange(1, n_steps):
@@ -271,8 +269,8 @@ class TrajoptPlanner(BasePlanner):
                 if error > constraint_threshold:
                     raise ConstraintViolationPlanningError(
                         name,
-                        threshold = constraint_threshold,
-                        violation_by = error)
+                        threshold=constraint_threshold,
+                        violation_by=error)
 
             # Check for the returned trajectory.
             waypoints = result.GetTraj()
@@ -281,10 +279,10 @@ class TrajoptPlanner(BasePlanner):
 
             # Convert the trajectory to OpenRAVE format.
             traj = self._WaypointsToTraj(robot, waypoints)
-            
-            # Generate unit-timed trajectory, required for GetCollisionCheckPts.
+
+            # Generate unit-timed trajectory required for GetCollisionCheckPts.
             timed_traj = util.ComputeUnitTiming(robot, traj)
-            
+
             # Check that trajectory is collision free.
             p = openravepy.KinBody.SaveParameters
             with robot.CreateRobotStateSaver(p.ActiveDOF):
@@ -326,10 +324,7 @@ class TrajoptPlanner(BasePlanner):
 
         request = {
             "basic_info": {
-                "robot": str(robot.GetName()),
-                "n_steps": num_steps,
-                "manip": "active",
-                "start_fixed": True
+                "n_steps": num_steps
             },
             "costs": [
                 {
@@ -402,9 +397,6 @@ class TrajoptPlanner(BasePlanner):
                 ranker = NominalConfiguration(manipulator.GetArmDOFValues())
 
         # Find initial collision-free IK solution.
-        from openravepy import (IkFilterOptions,
-                                IkParameterization,
-                                IkParameterizationType)
         ik_param = IkParameterization(
             pose, IkParameterizationType.Transform6D)
         ik_solutions = manipulator.FindIKSolutions(
@@ -412,7 +404,6 @@ class TrajoptPlanner(BasePlanner):
         if not len(ik_solutions):
             # Identify collision and raise error.
             self._raiseCollisionErrorForPose(robot, pose)
-           
 
         # Sort the IK solutions in ascending order by the costs returned by the
         # ranker. Lower cost solutions are better and infinite cost solutions
@@ -426,7 +417,9 @@ class TrajoptPlanner(BasePlanner):
         #
         #   GetEndEffector().GetTransform() * GetLocalToolTransform()
         #
-        link_pose = numpy.dot(pose, numpy.linalg.inv(manipulator.GetLocalToolTransform()))
+        link_pose = numpy.dot(
+            pose, numpy.linalg.inv(
+                manipulator.GetLocalToolTransform()))
         goal_position = link_pose[0:3, 3].tolist()
         goal_rotation = openravepy.quatFromRotationMatrix(link_pose).tolist()
 
@@ -436,10 +429,7 @@ class TrajoptPlanner(BasePlanner):
         # Construct a planning request with these constraints.
         request = {
             "basic_info": {
-                "robot": str(robot.GetName()),
-                "n_steps": num_steps,
-                "manip": "active",
-                "start_fixed": True
+                "n_steps": num_steps
             },
             "costs": [
                 {
@@ -598,6 +588,7 @@ class TrajoptPlanner(BasePlanner):
         # Return the generated trajectory.
         return traj
 
+    @PlanningMethod
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.050, **kwargs):
         """
@@ -623,10 +614,7 @@ class TrajoptPlanner(BasePlanner):
 
         request = {
             "basic_info": {
-                "robot": str(robot.GetName()),
-                "n_steps": n_waypoints,
-                "manip": "active",
-                "start_fixed": True
+                "n_steps": n_waypoints
             },
             "costs": [
                 {
@@ -667,10 +655,6 @@ class TrajoptPlanner(BasePlanner):
         """ Identify collision for pose and raise error.
         It should be called only when there is no IK solution and collision is expected. 
         """
-        from openravepy import (IkFilterOptions,
-                                IkParameterization,
-                                IkParameterizationType)
-
         manipulator = robot.GetActiveManipulator()
 
         ik_param = IkParameterization(
