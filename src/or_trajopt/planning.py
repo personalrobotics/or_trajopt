@@ -19,8 +19,7 @@ from prpy.planning.base import (BasePlanner,
                                 Tags)
 from prpy.planning.exceptions import (CollisionPlanningError,
                                       SelfCollisionPlanningError,
-                                      ConstraintViolationPlanningError,
-                                      UnsupportedPlanningError)
+                                      ConstraintViolationPlanningError)
 
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
