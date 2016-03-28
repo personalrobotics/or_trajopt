@@ -80,9 +80,6 @@ class TrajoptWrapper(MetaPlanner):
                 if hasattr(planner, method_name)]
 
     def plan(self, method, args, kwargs):
-        # Can't handle deferred planning yet.
-        assert not kwargs['defer']
-
         # According to prpy spec, the first positional argument is 'robot'.
         robot = args[0]
 
