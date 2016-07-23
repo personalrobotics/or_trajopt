@@ -304,7 +304,7 @@ class TrajoptPlanner(BasePlanner):
             if trajopt_env_userdata is not None:
                 env.Remove(trajopt_env_userdata)
 
-    @PlanningMethod
+    @ClonedPlanningMethod
     def PlanToConfiguration(self, robot, goal, **kwargs):
         """
         Plan to a desired configuration with Trajopt.
@@ -349,7 +349,7 @@ class TrajoptPlanner(BasePlanner):
         }
         return self._Plan(robot, request, **kwargs)
 
-    @PlanningMethod
+    @ClonedPlanningMethod
     def PlanToIK(self, robot, pose, **kwargs):
         """
         Plan to a desired end effector pose with Trajopt.
@@ -366,7 +366,7 @@ class TrajoptPlanner(BasePlanner):
         """
         return self._PlanToIK(robot, pose, **kwargs)
 
-    @PlanningMethod
+    @ClonedPlanningMethod
     def PlanToEndEffectorPose(self, robot, pose, **kwargs):
         """
         Plan to a desired end effector pose with Trajopt.
@@ -464,7 +464,7 @@ class TrajoptPlanner(BasePlanner):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
             return self._Plan(robot, request, **kwargs)
 
-    # @PlanningMethod
+    # @ClonedPlanningMethod
     def PlanToTSR(self, robot, tsrchains, is_interactive=False, **kw_args):
         """
         Plan using the given list of TSR chains with TrajOpt.
@@ -585,7 +585,7 @@ class TrajoptPlanner(BasePlanner):
         # Return the generated trajectory.
         return traj
 
-    @PlanningMethod
+    @ClonedPlanningMethod
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.050, **kwargs):
         """
