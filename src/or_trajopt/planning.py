@@ -15,7 +15,7 @@ from prpy.planning.retimer import HauserParabolicSmoother
 from prpy.planning.base import (BasePlanner,
                                 MetaPlanner,
                                 PlanningError,
-                                PlanningMethod,
+                                ClonedPlanningMethod,
                                 Tags)
 from prpy.planning.exceptions import (CollisionPlanningError,
                                       SelfCollisionPlanningError,
