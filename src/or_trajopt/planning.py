@@ -20,7 +20,7 @@ from prpy.planning.base import (BasePlanner,
 from prpy.planning.exceptions import (CollisionPlanningError,
                                       SelfCollisionPlanningError,
                                       ConstraintViolationPlanningError)
-
+from prpy.util import VanDerCorputSampleGenerator
 logger = logging.getLogger(__name__)
 os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
 
@@ -168,6 +168,7 @@ class TrajoptPlanner(BasePlanner):
               traj_constraints=(), goal_constraints=(),
               traj_costs=(), goal_costs=(),
               interactive=False, constraint_threshold=1e-4,
+              sampling_func=VanDerCorputSampleGenerator, norm_order=2,
               **kwargs):
         """
         Plan to a desired configuration with Trajopt.
@@ -212,6 +213,9 @@ class TrajoptPlanner(BasePlanner):
         @param interactive: pause every iteration, until you press 'p' or press
                            escape to disable further plotting
         @param constraint_threshold: acceptable per-constraint violation error
+        @param sampling_func: sample generator to compute validity checks
+        @param norm_order: order of norm to use for collision checking
+
         @returns traj: trajectory from current configuration to specified goal
         """
         import json
@@ -277,16 +281,15 @@ class TrajoptPlanner(BasePlanner):
             # Convert the trajectory to OpenRAVE format.
             traj = self._WaypointsToTraj(robot, waypoints)
 
-            # Generate unit-timed trajectory required for GetCollisionCheckPts.
-            timed_traj = util.ComputeUnitTiming(robot, traj)
-
             # Check that trajectory is collision free.
             p = openravepy.KinBody.SaveParameters
             with robot.CreateRobotStateSaver(p.ActiveDOF):
                 # Set robot DOFs to DOFs in optimization problem.
                 prob.SetRobotActiveDOFs()
-                checkpoints = util.GetCollisionCheckPts(robot, timed_traj,
-                                                        include_start=True)
+                checkpoints = util.GetLinearCollisionCheckPts(robot, traj,
+                                                              norm_order=norm_order,
+                                                              sampling_func=sampling_func)
+
                 for _, q_check in checkpoints:
                     self._checkCollisionForIKSolutions(robot, [q_check])
 
@@ -463,7 +466,6 @@ class TrajoptPlanner(BasePlanner):
         with robot.CreateRobotStateSaver(p.ActiveDOF):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
             return self._Plan(robot, request, **kwargs)
-
 
     @ClonedPlanningMethod
     def OptimizeTrajectory(self, robot, traj,
