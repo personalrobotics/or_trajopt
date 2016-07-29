@@ -15,6 +15,7 @@ from prpy.planning.retimer import HauserParabolicSmoother
 from prpy.planning.base import (BasePlanner,
                                 MetaPlanner,
                                 PlanningError,
+                                LockedPlanningMethod,
                                 ClonedPlanningMethod,
                                 Tags)
 from prpy.planning.exceptions import (CollisionPlanningError,
@@ -304,7 +305,7 @@ class TrajoptPlanner(BasePlanner):
             if trajopt_env_userdata is not None:
                 env.Remove(trajopt_env_userdata)
 
-    @ClonedPlanningMethod
+    @LockedPlanningMethod
     def PlanToConfiguration(self, robot, goal, **kwargs):
         """
         Plan to a desired configuration with Trajopt.
@@ -349,7 +350,7 @@ class TrajoptPlanner(BasePlanner):
         }
         return self._Plan(robot, request, **kwargs)
 
-    @ClonedPlanningMethod
+    @LockedPlanningMethod
     def PlanToIK(self, robot, pose, **kwargs):
         """
         Plan to a desired end effector pose with Trajopt.
@@ -366,7 +367,7 @@ class TrajoptPlanner(BasePlanner):
         """
         return self._PlanToIK(robot, pose, **kwargs)
 
-    @ClonedPlanningMethod
+    @LockedPlanningMethod
     def PlanToEndEffectorPose(self, robot, pose, **kwargs):
         """
         Plan to a desired end effector pose with Trajopt.
@@ -465,7 +466,7 @@ class TrajoptPlanner(BasePlanner):
             return self._Plan(robot, request, **kwargs)
 
 
-    @ClonedPlanningMethod
+    @LockedPlanningMethod
     def OptimizeTrajectory(self, robot, traj,
                            distance_penalty=0.050, **kwargs):
         """
