@@ -11,6 +11,7 @@ from openravepy import (IkFilterOptions,
                         IkParameterizationType)
 import os
 import prpy.util
+from prpy.collision import SimpleRobotCollisionChecker
 from prpy.planning.retimer import HauserParabolicSmoother
 from prpy.planning.base import (BasePlanner,
                                 MetaPlanner,
@@ -58,7 +59,8 @@ class CostType(enum.Enum):
 
 
 class TrajoptWrapper(MetaPlanner):
-    def __init__(self, planner):
+    def __init__(self, planner,
+            robot_collision_checker=SimpleRobotCollisionChecker):
         """
         Create a PrPy binding that wraps an existing planner and calls
         its planning methods followed by Trajopt's OptimizeTrajectory.
@@ -69,7 +71,8 @@ class TrajoptWrapper(MetaPlanner):
         # TODO: this should be revisited once the MetaPlanners are not assuming
         #       self._planners must exist.
         self._planners = (planner,)
-        self._trajopt = TrajoptPlanner()
+        self._trajopt = TrajoptPlanner(
+            robot_collision_checker=robot_collision_checker)
         self._simplifier = HauserParabolicSmoother(timelimit=0.25)
 
     def __str__(self):
@@ -116,7 +119,7 @@ class TrajoptWrapper(MetaPlanner):
 
 
 class TrajoptPlanner(BasePlanner):
-    def __init__(self):
+    def __init__(self, robot_collision_checker=SimpleRobotCollisionChecker):
         """
         Create a PrPy binding to the Trajopt motion optimization package.
 
@@ -124,6 +127,7 @@ class TrajoptPlanner(BasePlanner):
         planning operations.
         """
         super(TrajoptPlanner, self).__init__()
+        self.robot_collision_checker = robot_collision_checker
 
     def __str__(self):
         return 'Trajopt'
@@ -169,6 +173,7 @@ class TrajoptPlanner(BasePlanner):
               traj_costs=(), goal_costs=(),
               interactive=False, constraint_threshold=1e-4,
               sampling_func=VanDerCorputSampleGenerator, norm_order=2,
+              robot_collision_checker=None,
               **kwargs):
         """
         Plan to a desired configuration with Trajopt.
@@ -225,6 +230,9 @@ class TrajoptPlanner(BasePlanner):
         # Set up environment.
         env = robot.GetEnv()
         trajoptpy.SetInteractive(interactive)
+
+        if robot_collision_checker is None:
+            robot_collision_checker = self.robot_collision_checker(robot)
 
         # Trajopt's UserData gets confused if the same environment
         # is cloned into multiple times, so create a scope to later
@@ -291,7 +299,8 @@ class TrajoptPlanner(BasePlanner):
                                                               sampling_func=sampling_func)
 
                 for _, q_check in checkpoints:
-                    self._checkCollisionForIKSolutions(robot, [q_check])
+                    self._checkCollisionForIKSolutions(
+                        robot, robot_collision_checker, [q_check])
 
             # Convert the waypoints to a trajectory.
             prpy.util.SetTrajectoryTags(traj, {
@@ -386,6 +395,7 @@ class TrajoptPlanner(BasePlanner):
 
     def _PlanToIK(self, robot, pose,
                   ranker=None, **kwargs):
+        robot_collision_checker = self.robot_collision_checker(robot)
 
         # Plan using the active manipulator.
         with robot.GetEnv():
@@ -403,7 +413,7 @@ class TrajoptPlanner(BasePlanner):
             ik_param, IkFilterOptions.CheckEnvCollisions)
         if not len(ik_solutions):
             # Identify collision and raise error.
-            self._raiseCollisionErrorForPose(robot, pose)
+            self._raiseCollisionErrorForPose(robot, robot_collision_checker, pose)
 
         # Sort the IK solutions in ascending order by the costs returned by the
         # ranker. Lower cost solutions are better and infinite cost solutions
@@ -465,7 +475,8 @@ class TrajoptPlanner(BasePlanner):
         p = openravepy.KinBody.SaveParameters
         with robot.CreateRobotStateSaver(p.ActiveDOF):
             robot.SetActiveDOFs(manipulator.GetArmIndices())
-            return self._Plan(robot, request, **kwargs)
+            return self._Plan(robot, request,
+                robot_collision_checker=robot_collision_checker, **kwargs)
 
     @ClonedPlanningMethod
     def OptimizeTrajectory(self, robot, traj,
@@ -530,7 +541,7 @@ class TrajoptPlanner(BasePlanner):
             traj.Insert(i, waypoint)
         return traj
 
-    def _raiseCollisionErrorForPose(self, robot, pose):
+    def _raiseCollisionErrorForPose(self, robot, robot_collision_checker, pose):
         """ Identify collision for pose and raise error.
         It should be called only when there is no IK solution and collision is expected. 
         """
@@ -556,23 +567,18 @@ class TrajoptPlanner(BasePlanner):
                 releasegil = True)
             raise PlanningError(str(ik_return.GetAction())) #this most likely is JointLimit
         
-        self._checkCollisionForIKSolutions(robot, map(lambda x: x.GetSolution(), ik_returns))
+        self._checkCollisionForIKSolutions(robot, robot_collision_checker,
+            map(lambda x: x.GetSolution(), ik_returns))
         raise Exception('Collision/JointLimit error expected but not found.')
 
-    def _checkCollisionForIKSolutions(self, robot, ik_solutions): 
+    def _checkCollisionForIKSolutions(self, robot, robot_collision_checker, ik_solutions): 
         """ Raise collision/joint limit  error if there is one in ik_solutions
         Should be called while saving robot's current state 
         """
-        from openravepy import CollisionReport
         manipulator = robot.GetActiveManipulator()  
         p = openravepy.KinBody.SaveParameters
 
         with robot.CreateRobotStateSaver(p.LinkTransformation):
             for q in ik_solutions: 
                 robot.SetActiveDOFValues(q)
-                report = CollisionReport() 
-                env = robot.GetEnv()
-                if env.CheckCollision(robot, report=report): 
-                    raise CollisionPlanningError.FromReport(report)
-                elif robot.CheckSelfCollision(report=report):
-                    raise SelfCollisionPlanningError.FromReport(report)
+                robot_collision_checker.VerifyCollisionFree()
