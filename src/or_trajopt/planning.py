@@ -254,8 +254,6 @@ class TrajoptPlanner(BasePlanner):
             n_steps = request['basic_info']['n_steps']
             n_dofs = robot.GetActiveDOF()
             i_dofs = robot.GetActiveDOFIndices()
-            #print 'Active DOF', n_dofs
-            #print s
 
             # Add trajectory-wide costs and constraints to each timestep.
             for t in xrange(1, n_steps):
@@ -281,6 +279,7 @@ class TrajoptPlanner(BasePlanner):
             # Perform trajectory optimization.
             t_start = time.time()
             result = trajoptpy.OptimizeProblem(prob)
+
             t_elapsed = time.time() - t_start
             logger.debug("Optimization took {:.3f} seconds".format(t_elapsed))
 
@@ -633,11 +632,9 @@ class TrajoptPlanner(BasePlanner):
         n_waypoints = traj.GetNumWaypoints()
         dofs = robot.GetActiveDOFIndices()
         goal = traj.GetWaypoint(traj.GetNumWaypoints()-1)[0:7]
-        print 'DOFS in Optimize', dofs
         waypoints = [cspec.ExtractJointValues(traj.GetWaypoint(i),
                                               robot, dofs).tolist()
                      for i in range(n_waypoints)]
-        print 'Waypoints', len(waypoints)
 
         request = {
             "basic_info": {
@@ -645,25 +642,25 @@ class TrajoptPlanner(BasePlanner):
                 "manip": "active",
                 "start_fixed": True
             },
-            #"costs": [
-                #{
-                #    "type": "joint_vel",
-                #    "params": {"coeffs": [1]}
-                #},
-            #    {
-            #        "type": "collision",
-            #        "params": {
-            #            "coeffs": [75], #was 20
-            #            "dist_pen": [distance_penalty]
-            #        },
-            #    }
-            #],
-            #"constraints": [
-            #    {
-            #        "type": "joint",
-            #        "params": {"vals": waypoints[-1]}
-            #    }
-            #],
+            "costs": [
+                {
+                    "type": "joint_vel",
+                    "params": {"coeffs": [1]}
+                },
+                {
+                    "type": "collision",
+                    "params": {
+                        "coeffs": [75], #was 20
+                        "dist_pen": [distance_penalty]
+                    },
+                }
+            ],
+            "constraints": [
+                {
+                    "type": "joint",
+                    "params": {"vals": waypoints[-1]}
+                }
+            ],
             "constraints": [
                 {
                     "type": "joint",
