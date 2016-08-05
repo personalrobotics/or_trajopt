@@ -60,7 +60,7 @@ class CostType(enum.Enum):
 
 class TrajoptWrapper(MetaPlanner):
     def __init__(self, planner,
-            robot_collision_checker=DefaultRobotCollisionChecker):
+                 robot_collision_checker=DefaultRobotCollisionChecker):
         """
         Create a PrPy binding that wraps an existing planner and calls
         its planning methods followed by Trajopt's OptimizeTrajectory.
