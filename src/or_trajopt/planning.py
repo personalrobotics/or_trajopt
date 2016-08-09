@@ -11,7 +11,7 @@ from openravepy import (IkFilterOptions,
                         IkParameterizationType)
 import os
 import prpy.util
-from prpy.collision import DefaultRobotCollisionChecker
+from prpy.collision import DefaultRobotCollisionCheckerFactory
 from prpy.planning.retimer import HauserParabolicSmoother
 from prpy.planning.base import (BasePlanner,
                                 MetaPlanner,
@@ -59,8 +59,7 @@ class CostType(enum.Enum):
 
 
 class TrajoptWrapper(MetaPlanner):
-    def __init__(self, planner,
-                 robot_collision_checker=DefaultRobotCollisionChecker):
+    def __init__(self, planner, robot_checker_factory=None):
         """
         Create a PrPy binding that wraps an existing planner and calls
         its planning methods followed by Trajopt's OptimizeTrajectory.
@@ -68,11 +67,15 @@ class TrajoptWrapper(MetaPlanner):
         @param planner the PrPy plan wrapper that will be wrapped
         """
         assert planner
+
+        if robot_checker_factory is None:
+            robot_checker_factory = DefaultRobotCollisionCheckerFactory
+
         # TODO: this should be revisited once the MetaPlanners are not assuming
         #       self._planners must exist.
         self._planners = (planner,)
         self._trajopt = TrajoptPlanner(
-            robot_collision_checker=robot_collision_checker)
+                robot_checker_factory=robot_checker_factory)
         self._simplifier = HauserParabolicSmoother(timelimit=0.25)
 
     def __str__(self):
@@ -119,7 +122,7 @@ class TrajoptWrapper(MetaPlanner):
 
 
 class TrajoptPlanner(BasePlanner):
-    def __init__(self, robot_collision_checker=DefaultRobotCollisionChecker):
+    def __init__(self, robot_checker_factory=None):
         """
         Create a PrPy binding to the Trajopt motion optimization package.
 
@@ -127,7 +130,11 @@ class TrajoptPlanner(BasePlanner):
         planning operations.
         """
         super(TrajoptPlanner, self).__init__()
-        self.robot_collision_checker = robot_collision_checker
+
+        if robot_checker_factory is None:
+            robot_checker_factory = DefaultRobotCollisionCheckerFactory
+
+        self.robot_checker_factory = robot_checker_factory
 
     def __str__(self):
         return 'Trajopt'
@@ -356,7 +363,7 @@ class TrajoptPlanner(BasePlanner):
             }
         }
 
-        with self.robot_collision_checker(robot) as robot_checker:
+        with self.robot_checker_factory(robot) as robot_checker:
             return self._Plan(robot, robot_checker, request, **kwargs)
 
     @ClonedPlanningMethod
@@ -374,7 +381,7 @@ class TrajoptPlanner(BasePlanner):
                               or press escape to disable further plotting
         @return traj a trajectory from current configuration to specified pose
         """
-        with self.robot_collision_checker(robot) as robot_checker:
+        with self.robot_checker_factory(robot) as robot_checker:
             return self._PlanToIK(robot, robot_checker, pose, **kwargs)
 
     @ClonedPlanningMethod
@@ -390,7 +397,7 @@ class TrajoptPlanner(BasePlanner):
                               or press escape to disable further plotting
         @return traj a trajectory from current configuration to specified pose
         """
-        with self.robot_collision_checker(robot) as robot_checker:
+        with self.robot_checker_factory(robot) as robot_checker:
             return self._PlanToIK(robot, robot_checker, pose, **kwargs)
 
     def _PlanToIK(self, robot, robot_checker, pose, ranker=None, **kwargs):
