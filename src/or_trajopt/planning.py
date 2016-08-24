@@ -532,7 +532,7 @@ class TrajoptPlanner(BasePlanner):
                 "data": waypoints
             }
         }
-        with self.robot_collision_checker(robot) as robot_checker:
+        with self.robot_checker_factory(robot) as robot_checker:
             return self._Plan(robot, robot_checker, request, **kwargs)
 
     def _WaypointsToTraj(self, robot, waypoints):
