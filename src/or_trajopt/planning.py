@@ -22,7 +22,9 @@ from prpy.planning.exceptions import (CollisionPlanningError,
                                       ConstraintViolationPlanningError)
 from prpy.util import VanDerCorputSampleGenerator
 logger = logging.getLogger(__name__)
-os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
+
+#os.environ['TRAJOPT_LOG_THRESH'] = 'WARN'
+os.environ['TRAJOPT_LOG_THRESH'] = 'INFO'
 
 # Keys under which Trajopt stores custom UserData.
 TRAJOPT_USERDATA_KEYS = ['trajopt_cc', 'bt_use_trimesh', 'osg', 'bt']
@@ -150,8 +152,13 @@ class TrajoptPlanner(BasePlanner):
         if wide == True:
            if isinstance(fntype, CostType) and dfdx is None:
                problem.AddErrorCost(f, [(t, i) for i in inds for t in range(timestep)], fntype.value, fnname)
+           elif isinstance(fntype, CostType) and dfdx is not None:
+               problem.AddErrorCost(f, dfdx, [(t, i) for i in inds for t in range(timestep)], fntype.value, fnname)
            elif isinstance(fntype, ConstraintType) and dfdx is None: 
                problem.AddConstraint(f, [(timestep, i) for i in inds for timestep in range(timestep)],
+                     fntype.value, fnname)
+           elif isinstance(fntype, ConstraintType) and dfdx is not None:
+               problem.AddConstraint(f, dfdx, [(timestep, i) for i in inds for timestep in range(timestep)],
                      fntype.value, fnname)
            else:
                ValueError('Trajectory wide constraints and those with dfdx are not supported')
@@ -285,6 +292,7 @@ class TrajoptPlanner(BasePlanner):
 
             # Check for constraint violations.
             for name, error in result.GetConstraints():
+                #print name, error, constraint_threshold
                 if error > constraint_threshold:
                     raise ConstraintViolationPlanningError(
                         name,
